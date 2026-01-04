@@ -22,7 +22,7 @@ from sqlalchemy.orm import selectinload
 
 from .auth import ensure_default_admin, generate_device_token, get_sso_user, verify_password
 from .db import Base, SessionLocal, engine
-from .models import Command, Device, Group, ServerConfig, User
+from .models import Command, Device, Group, ServerConfig, User, device_groups
 from .settings import settings
 
 app = FastAPI(title=settings.app_name)
@@ -194,6 +194,83 @@ BEGIN
     ALTER TABLE devices
     ADD CONSTRAINT FK_devices_groups_group_id
     FOREIGN KEY (group_id) REFERENCES groups(id);
+END
+"""
+                )
+            )
+
+            # Create device_groups join table if missing
+            conn.execute(
+                text(
+                    """
+IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'device_groups')
+BEGIN
+    CREATE TABLE device_groups (
+        device_id INT NOT NULL,
+        group_id INT NOT NULL,
+        CONSTRAINT PK_device_groups PRIMARY KEY (device_id, group_id)
+    );
+END
+"""
+                )
+            )
+
+            # Index (best-effort)
+            conn.execute(
+                text(
+                    """
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes WHERE name = 'IX_device_groups_group_id' AND object_id = OBJECT_ID('device_groups')
+)
+BEGIN
+    CREATE INDEX IX_device_groups_group_id ON device_groups(group_id);
+END
+"""
+                )
+            )
+
+            # FKs (best-effort)
+            conn.execute(
+                text(
+                    """
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_device_groups_devices_device_id')
+BEGIN
+    ALTER TABLE device_groups
+    ADD CONSTRAINT FK_device_groups_devices_device_id
+    FOREIGN KEY (device_id) REFERENCES devices(id)
+    ON DELETE CASCADE;
+END
+"""
+                )
+            )
+            conn.execute(
+                text(
+                    """
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_device_groups_groups_group_id')
+BEGIN
+    ALTER TABLE device_groups
+    ADD CONSTRAINT FK_device_groups_groups_group_id
+    FOREIGN KEY (group_id) REFERENCES groups(id)
+    ON DELETE CASCADE;
+END
+"""
+                )
+            )
+
+            # Backfill device_groups from legacy devices.group_id
+            conn.execute(
+                text(
+                    """
+IF COL_LENGTH('devices', 'group_id') IS NOT NULL
+BEGIN
+    INSERT INTO device_groups (device_id, group_id)
+    SELECT d.id, d.group_id
+    FROM devices d
+    WHERE d.group_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM device_groups dg
+          WHERE dg.device_id = d.id AND dg.group_id = d.group_id
+      );
 END
 """
                 )
@@ -373,9 +450,16 @@ def devices(request: Request, db=Depends(db_session)):
         is_admin = False
     groups = db.scalars(select(Group).order_by(Group.name)).all()
 
-    q = select(Device).options(selectinload(Device.group)).order_by(Device.hostname)
+    selected_group = None
     if selected_group_id is not None:
-        q = q.where(Device.group_id == selected_group_id)
+        try:
+            selected_group = db.get(Group, selected_group_id)
+        except Exception:
+            selected_group = None
+
+    q = select(Device).options(selectinload(Device.groups)).order_by(Device.hostname)
+    if selected_group_id is not None:
+        q = q.where(Device.groups.any(Group.id == selected_group_id))
     rows = db.scalars(q).all()
 
     total_devices = len(rows)
@@ -412,6 +496,7 @@ def devices(request: Request, db=Depends(db_session)):
             "enrollment_token": cfg.agent_enrollment_token,
             "groups": groups,
             "selected_group_id": selected_group_id,
+            "selected_group": selected_group,
             "devices": rows,
             "online_cutoff": online_cutoff,
             "online_window_minutes": online_window_minutes,
@@ -434,7 +519,7 @@ def device_detail(device_id: int, request: Request, db=Depends(db_session)):
     ok = request.query_params.get("ok")
     preselect_cmd = request.query_params.get("cmd")
 
-    dev = db.scalar(select(Device).options(selectinload(Device.group)).where(Device.id == device_id))
+    dev = db.scalar(select(Device).options(selectinload(Device.groups)).where(Device.id == device_id))
     if not dev:
         raise HTTPException(status_code=404)
     groups = db.scalars(select(Group).order_by(Group.name)).all()
@@ -1185,6 +1270,7 @@ def send_command(
 def set_device_group(
     device_id: int,
     request: Request,
+    group_ids: list[str] = Form([]),
     group_id: str = Form(""),
     db=Depends(db_session),
 ):
@@ -1194,23 +1280,32 @@ def set_device_group(
     if not dev:
         raise HTTPException(status_code=404)
 
-    raw = (group_id or "").strip()
-    if not raw:
+    raw_ids = [str(x).strip() for x in (group_ids or []) if str(x).strip()]
+    if not raw_ids:
+        legacy_raw = (group_id or "").strip()
+        raw_ids = [legacy_raw] if legacy_raw else []
+
+    if not raw_ids:
+        dev.groups = []
         dev.group_id = None
         db.commit()
         return RedirectResponse(f"/devices/{device_id}?ok=group_cleared", status_code=302)
 
-    if not raw.isdigit():
+    if any((not s.isdigit()) for s in raw_ids):
         msg = "Geçersiz grup"
         return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
 
-    gid = int(raw)
-    grp = db.get(Group, gid)
-    if not grp:
+    ids = sorted({int(s) for s in raw_ids})
+    groups = db.scalars(select(Group).where(Group.id.in_(ids))).all()
+    found = {g.id for g in groups}
+    missing = [gid for gid in ids if gid not in found]
+    if missing:
         msg = "Grup bulunamadı"
         return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
 
-    dev.group_id = gid
+    dev.groups = groups
+    # Keep legacy column in sync with a deterministic "primary" group.
+    dev.group_id = ids[0] if ids else None
     db.commit()
     return RedirectResponse(f"/devices/{device_id}?ok=group_saved", status_code=302)
 
@@ -1240,6 +1335,38 @@ def create_group(
     db.commit()
     db.refresh(g)
     return RedirectResponse(f"/devices?group_id={g.id}", status_code=302)
+
+
+@app.post("/groups/{group_id}/rename")
+def rename_group(
+    group_id: int,
+    request: Request,
+    name: str = Form(""),
+    db=Depends(db_session),
+):
+    require_admin_user(request, db)
+
+    grp = db.get(Group, group_id)
+    if not grp:
+        raise HTTPException(status_code=404)
+
+    n = (name or "").strip()
+    if not n:
+        msg = "Grup adı boş olamaz"
+        return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
+    if len(n) > 128:
+        msg = "Grup adı çok uzun"
+        return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
+
+    existing = db.scalar(select(Group).where(Group.name == n))
+    if existing and existing.id != group_id:
+        msg = "Bu isimde bir grup zaten var"
+        return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
+
+    grp.name = n
+    db.commit()
+    msg = "Grup adı güncellendi"
+    return RedirectResponse(f"/devices?group_id={group_id}&ok={quote(msg)}", status_code=302)
 
 
 @app.post("/groups/{group_id}/command")
@@ -1313,7 +1440,7 @@ def send_group_command(
             msg = "Parola güncelleme: geçersiz payload (password gerekli)"
             return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
 
-    devices = db.scalars(select(Device).where(Device.group_id == group_id)).all()
+    devices = db.scalars(select(Device).where(Device.groups.any(Group.id == group_id))).all()
     if not devices:
         msg = f"Grup '{grp.name}': cihaz yok"
         return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)

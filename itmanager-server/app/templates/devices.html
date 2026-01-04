@@ -207,6 +207,20 @@
         <div class="mt-3">
           <div class="text-muted small mb-2">Seçili gruba komut gönder:</div>
 
+          {% if is_admin %}
+          <div class="mb-2">
+            <form method="post" action="/groups/{{ selected_group_id }}/rename" class="m-0">
+              <div class="d-flex align-items-center gap-2 flex-wrap">
+                <div class="small text-muted" style="min-width: 110px;">Grup adı:</div>
+                <input class="form-control form-control-sm" name="name" value="{{ selected_group.name if selected_group else '' }}" placeholder="Grup adı" style="max-width: 340px;" />
+                <button class="btn btn-outline-secondary btn-sm" type="submit">Kaydet</button>
+              </div>
+            </form>
+          </div>
+          {% else %}
+          <div class="text-muted small mb-2">Grup adı değiştirme için admin yetkisi gerekir.</div>
+          {% endif %}
+
           <form id="group-command-form" method="post" action="/groups/{{ selected_group_id }}/command" class="m-0">
             <input type="hidden" id="group-payload" name="payload" value="{}" />
 
@@ -461,7 +475,13 @@
                   <div class="text-muted small">Agent: <span class="mono">{{ d.agent_version or 'unknown' }}</span></div>
                 </td>
                 <td>
-                  <span class="badge text-bg-light">{{ d.group.name if d.group else '-' }}</span>
+                  {% if d.groups and d.groups|length %}
+                    {% for g in d.groups %}
+                      <span class="badge text-bg-light">{{ g.name }}</span>
+                    {% endfor %}
+                  {% else %}
+                    <span class="badge text-bg-light">-</span>
+                  {% endif %}
                 </td>
                 <td class="mono">{{ d.ip or '-' }}</td>
                 <td>{{ d.os or '-' }}</td>

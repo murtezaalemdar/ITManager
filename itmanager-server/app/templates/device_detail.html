@@ -509,10 +509,9 @@
               <button class="btn btn-outline-primary btn-sm" type="submit" {% if not device.ui_supports_agent_update %}title="Agent eski olabilir; komut başarısız olabilir"{% endif %}>Agent Güncelle</button>
             </form>
             <form method="post" action="/devices/{{ device.id }}/group" class="m-0 admin-actionbar__group">
-              <select class="form-select form-select-sm" name="group_id" style="max-width: 240px;">
-                <option value="" {% if not device.group %}selected{% endif %}>(Grupsuz)</option>
+              <select class="form-select form-select-sm" name="group_ids" multiple size="1" style="max-width: 240px;">
                 {% for g in groups %}
-                  <option value="{{ g.id }}" {% if device.group and device.group.id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                  <option value="{{ g.id }}" {% if device.groups and (g in device.groups) %}selected{% endif %}>{{ g.name }}</option>
                 {% endfor %}
               </select>
               <button class="btn btn-outline-secondary btn-sm" type="submit">Grubu Kaydet</button>

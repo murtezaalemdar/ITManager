@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Table, Text, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+
+
+device_groups = Table(
+    "device_groups",
+    Base.metadata,
+    Column("device_id", ForeignKey("devices.id"), primary_key=True),
+    Column("group_id", ForeignKey("groups.id"), primary_key=True),
+)
 
 
 class Group(Base):
@@ -15,7 +23,10 @@ class Group(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    devices: Mapped[list[Device]] = relationship(back_populates="group")
+    devices: Mapped[list[Device]] = relationship(
+        secondary=device_groups,
+        back_populates="groups",
+    )
 
 
 class Device(Base):
@@ -30,9 +41,13 @@ class Device(Base):
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     os: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Legacy single-group support (kept for backward compatibility with older DBs/UI)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"), nullable=True, index=True)
 
-    group: Mapped[Group | None] = relationship(back_populates="devices")
+    groups: Mapped[list[Group]] = relationship(
+        secondary=device_groups,
+        back_populates="devices",
+    )
 
     commands: Mapped[list[Command]] = relationship(back_populates="device")
 
