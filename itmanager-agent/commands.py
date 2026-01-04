@@ -12,6 +12,135 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 
+def _wts_send_message_to_sessions(title: str, message: str, timeout: int = 15) -> Tuple[int, str, str]:
+    """Send a modal message box to active/connected user sessions.
+
+    This works from a Windows service context and allows a custom title, unlike msg.exe.
+    """
+    if os.name != "nt":
+        return 2, "", "WTSSendMessage is only available on Windows"
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception as e:
+        return 2, "", f"ctypes unavailable: {e}"
+
+    # WTS constants
+    WTS_CURRENT_SERVER_HANDLE = wintypes.HANDLE(0)
+    WTSActive = 0
+    WTSConnected = 1
+
+    class WTS_SESSION_INFO(ctypes.Structure):
+        _fields_ = [
+            ("SessionId", wintypes.DWORD),
+            ("pWinStationName", wintypes.LPWSTR),
+            ("State", wintypes.DWORD),
+        ]
+
+    wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    WTSEnumerateSessionsW = wtsapi32.WTSEnumerateSessionsW
+    WTSEnumerateSessionsW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.POINTER(WTS_SESSION_INFO)),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    WTSEnumerateSessionsW.restype = wintypes.BOOL
+
+    WTSFreeMemory = wtsapi32.WTSFreeMemory
+    WTSFreeMemory.argtypes = [wintypes.LPVOID]
+    WTSFreeMemory.restype = None
+
+    WTSSendMessageW = wtsapi32.WTSSendMessageW
+    WTSSendMessageW.argtypes = [
+        wintypes.HANDLE,  # hServer
+        wintypes.DWORD,  # SessionId
+        wintypes.LPWSTR,  # pTitle
+        wintypes.DWORD,  # TitleLength (bytes)
+        wintypes.LPWSTR,  # pMessage
+        wintypes.DWORD,  # MessageLength (bytes)
+        wintypes.DWORD,  # Style
+        wintypes.DWORD,  # Timeout
+        ctypes.POINTER(wintypes.DWORD),  # pResponse
+        wintypes.BOOL,  # bWait
+    ]
+    WTSSendMessageW.restype = wintypes.BOOL
+
+    # Fallback helper
+    WTSGetActiveConsoleSessionId = kernel32.WTSGetActiveConsoleSessionId
+    WTSGetActiveConsoleSessionId.argtypes = []
+    WTSGetActiveConsoleSessionId.restype = wintypes.DWORD
+
+    title = str(title or "")
+    message = str(message or "")
+
+    # WTSSendMessage expects byte lengths for UTF-16 strings.
+    title_len = len(title.encode("utf-16le"))
+    msg_len = len(message.encode("utf-16le"))
+
+    # MB_ICONINFORMATION | MB_OK
+    style = 0x00000040
+    sent = 0
+    last_err = ""
+
+    # Enumerate sessions; if it fails, try the active console session.
+    p_sessions = ctypes.POINTER(WTS_SESSION_INFO)()
+    count = wintypes.DWORD(0)
+    ok_enum = WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, ctypes.byref(p_sessions), ctypes.byref(count))
+    session_ids: list[int] = []
+    try:
+        if ok_enum and count.value:
+            for i in range(int(count.value)):
+                si = p_sessions[i]
+                if int(si.State) in (WTSActive, WTSConnected):
+                    session_ids.append(int(si.SessionId))
+    finally:
+        if ok_enum and p_sessions:
+            try:
+                WTSFreeMemory(p_sessions)
+            except Exception:
+                pass
+
+    if not session_ids:
+        try:
+            sid = int(WTSGetActiveConsoleSessionId())
+            if sid >= 0:
+                session_ids = [sid]
+        except Exception:
+            session_ids = []
+
+    for sid in session_ids:
+        try:
+            response = wintypes.DWORD(0)
+            ok_send = WTSSendMessageW(
+                WTS_CURRENT_SERVER_HANDLE,
+                wintypes.DWORD(sid),
+                title,
+                wintypes.DWORD(title_len),
+                message,
+                wintypes.DWORD(msg_len),
+                wintypes.DWORD(style),
+                wintypes.DWORD(int(timeout)),
+                ctypes.byref(response),
+                wintypes.BOOL(False),
+            )
+            if ok_send:
+                sent += 1
+            else:
+                err = ctypes.get_last_error()
+                last_err = f"WTSSendMessage failed for session {sid} (winerr={err})"
+        except Exception as e:
+            last_err = str(e)
+
+    if sent:
+        return 0, f"sent:{sent}", ""
+    return 2, "", last_err or "no active user session"
+
+
 def _exit_password_path() -> Path:
     base = os.environ.get("ProgramData") or r"C:\ProgramData"
     return Path(base) / "ITManagerAgent" / "exit_password.json"
@@ -319,8 +448,15 @@ $pretty
         if not merged:
             return 2, "", "missing payload.text (or payload.message)"
 
-        # Show an interactive message to the currently logged-on user(s).
-        # Note: works best on Pro/Enterprise; may be limited by policies.
+        # Custom-titled message to the logged-on user(s).
+        # Title requirement: "Bilgi İşlemden Mesaj" + local date/time.
+        now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+        box_title = f"Bilgi İşlemden Mesaj - {now_str}"
+        code, out, err = _wts_send_message_to_sessions(box_title, merged, timeout=15)
+        if code == 0:
+            return code, out, err
+
+        # Fallback: msg.exe (cannot control title bar; will show "Message from ...")
         return _run(f"msg * /TIME:15 {merged}", timeout=15)
 
     if cmd_type in ("cmd_exec", "cmd"):
@@ -346,13 +482,17 @@ $pretty
     # ---- Windows feature modules (core) ----
 
     if cmd_type in ("services_list",):
-        ps = suggest = (
-            "Get-CimInstance Win32_Service | "
-            "Select-Object Name,DisplayName,State,StartMode | "
-            "Sort-Object DisplayName | "
-            "ConvertTo-Json -Depth 3"
+        # Compatibility: some field machines still run Windows PowerShell 2.0 where
+        # Get-CimInstance is not available. Fall back to Get-WmiObject.
+        ps = (
+            "$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; "
+            "try { "
+            "  if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { $svcs = Get-CimInstance Win32_Service } "
+            "  else { $svcs = Get-WmiObject Win32_Service } "
+            "  $svcs | Select-Object Name,DisplayName,State,StartMode | Sort-Object DisplayName | ConvertTo-Json -Depth 3 "
+            "} catch { Write-Error ($_ | Out-String); exit 1 }"
         )
-        return _run_powershell(ps, timeout=60)
+        return _run_powershell(ps, timeout=90)
 
     if cmd_type in ("service_control",):
         name = _payload_str(payload, "name").strip()
@@ -417,12 +557,23 @@ $pretty
             max_events = 2000
 
         log_escaped = _escape_ps_single_quotes(log_name)
+        # Compatibility: prefer Get-WinEvent; fall back to Get-EventLog on older systems.
+        # Normalize property names to match server UI columns.
         ps = (
+            "$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; "
             f"$start=(Get-Date).AddHours(-{hours}); "
-            f"Get-WinEvent -FilterHashtable @{{LogName='{log_escaped}'; StartTime=$start}} -MaxEvents {max_events} | "
-            "Select-Object TimeCreated,Id,LevelDisplayName,ProviderName,Message | ConvertTo-Json -Depth 4"
+            "try { "
+            "  if (Get-Command Get-WinEvent -ErrorAction SilentlyContinue) { "
+            f"    Get-WinEvent -FilterHashtable @{{LogName='{log_escaped}'; StartTime=$start}} -MaxEvents {max_events} | "
+            "      Select-Object TimeCreated,Id,LevelDisplayName,ProviderName,Message "
+            "  } else { "
+            f"    Get-EventLog -LogName '{log_escaped}' -After $start -Newest {max_events} | "
+            "      Select-Object @{n='TimeCreated';e={$_.TimeGenerated}}, @{n='Id';e={$_.EventID}}, "
+            "        @{n='LevelDisplayName';e={$_.EntryType}}, @{n='ProviderName';e={$_.Source}}, Message "
+            "  } | ConvertTo-Json -Depth 4 "
+            "} catch { Write-Error ($_ | Out-String); exit 1 }"
         )
-        return _run_powershell(ps, timeout=90)
+        return _run_powershell(ps, timeout=120)
 
     if cmd_type in ("task_list",):
         ps = (

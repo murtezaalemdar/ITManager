@@ -23,7 +23,9 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $localServerDir = Join-Path $repoRoot 'itmanager-server'
 
 $files = @(
+  @{ Local = (Join-Path $localServerDir 'app\models.py'); Remote = "$RemoteRoot/app/models.py" },
   @{ Local = (Join-Path $localServerDir 'app\main.py'); Remote = "$RemoteRoot/app/main.py" },
+  @{ Local = (Join-Path $localServerDir 'app\templates\devices.html'); Remote = "$RemoteRoot/app/templates/devices.html" },
   @{ Local = (Join-Path $localServerDir 'app\templates\device_detail.html'); Remote = "$RemoteRoot/app/templates/device_detail.html" }
 )
 

@@ -139,6 +139,10 @@
     <div class="alert alert-danger" role="alert">{{ err }}</div>
     {% endif %}
 
+    {% if ok %}
+    <div id="ok-alert" class="alert alert-success" role="alert">{{ ok }}</div>
+    {% endif %}
+
     {% if is_admin %}
     <div class="glass mb-3">
       <div class="p-3 p-md-4">
@@ -148,20 +152,243 @@
             <div class="text-muted small">Agent'ların ilk kayıt (register) için kullandığı token.</div>
           </div>
           <form method="post" action="/admin/enrollment/rotate" class="m-0">
-            <button class="btn btn-outline-danger btn-sm" type="submit">Rotate</button>
+            <button class="btn btn-outline-danger btn-sm rounded-pill" type="submit">Rotate</button>
           </form>
         </div>
 
-        <div class="d-flex align-items-center gap-2 mt-3 flex-wrap">
-          <code class="mono" id="enrollToken">{{ enrollment_token }}</code>
-          <button class="btn btn-primary btn-sm" type="button" onclick="copyEnrollToken()">Kopyala</button>
-          <span class="text-muted small" id="copyMsg"></span>
+        <div class="mt-3">
+          <div class="input-group input-group-sm" style="max-width: 720px;">
+            <input class="form-control mono" id="enrollTokenInp" type="text" value="{{ enrollment_token }}" readonly />
+            <button class="btn btn-primary" type="button" onclick="copyEnrollToken()">Kopyala</button>
+          </div>
+          <div class="text-muted small mt-1" id="copyMsg"></div>
         </div>
 
         <div class="text-muted small mt-2">Rotate sonrası tüm agent config'leri yeni token ile güncellenmeli.</div>
       </div>
     </div>
     {% endif %}
+
+    <div class="glass mb-3">
+      <div class="p-3 p-md-4">
+        <div class="row g-3 align-items-end">
+          <div class="col-12 col-lg-6">
+            <form method="get" action="/devices" class="m-0">
+              <label class="form-label fw-semibold" for="group_id">Grup</label>
+              <div class="d-flex align-items-center gap-2 flex-wrap">
+                <select class="form-select form-select-sm" id="group_id" name="group_id" style="max-width: 340px;">
+                  <option value="" {% if not selected_group_id %}selected{% endif %}>Tümü</option>
+                  {% for g in groups %}
+                    <option value="{{ g.id }}" {% if selected_group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                  {% endfor %}
+                </select>
+                <button class="btn btn-outline-primary btn-sm" type="submit">Filtrele</button>
+                {% if selected_group_id %}
+                  <a class="btn btn-outline-secondary btn-sm" href="/devices">Temizle</a>
+                {% endif %}
+              </div>
+            </form>
+          </div>
+
+          {% if is_admin %}
+          <div class="col-12 col-lg-6">
+            <form method="post" action="/groups/create" class="m-0">
+              <label class="form-label fw-semibold" for="group_name">Yeni Grup</label>
+              <div class="d-flex align-items-center gap-2 flex-wrap">
+                <input class="form-control form-control-sm" id="group_name" name="name" placeholder="Örn: Muhasebe" style="max-width: 340px;" />
+                <button class="btn btn-primary btn-sm" type="submit">Oluştur</button>
+              </div>
+            </form>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if selected_group_id %}
+        <div class="mt-3">
+          <div class="text-muted small mb-2">Seçili gruba komut gönder:</div>
+
+          <form id="group-command-form" method="post" action="/groups/{{ selected_group_id }}/command" class="m-0">
+            <input type="hidden" id="group-payload" name="payload" value="{}" />
+
+            <div class="row g-2 align-items-end">
+              <div class="col-12 col-lg-4">
+                <label class="form-label fw-semibold" for="group-cmd-type">Komut</label>
+                <select class="form-select form-select-sm" id="group-cmd-type" name="type">
+                  <option value="inventory" selected>Envanter Topla</option>
+                  <option value="notify">Kullanıcıya Mesaj Gönder</option>
+                  <option value="services_list">Servisleri Listele</option>
+                  <option value="service_control">Servis Başlat/Durdur/Restart</option>
+                  <option value="processes_list">Process Listele</option>
+                  <option value="process_kill">Process Sonlandır</option>
+                  <option value="eventlog_recent">Event Log (Son Kayıtlar)</option>
+                  <option value="task_list">Görev Zamanlayıcı Listele</option>
+                  <option value="task_run">Görev Zamanlayıcı Çalıştır</option>
+                  <option value="restart">Restart</option>
+                  <option value="shutdown">Shutdown</option>
+                  <option value="w32time_resync">W32Time Resync</option>
+                  <option value="w32time_restart">W32Time Restart</option>
+                  <option value="w32time_status">W32Time Status</option>
+                  <option value="time_get">Saat/Tarih Oku</option>
+                  <option value="time_set">Saat/Tarih Ayarla</option>
+                  <option value="agent_update">Agent Güncelle</option>
+
+                  {% if is_admin %}
+                  <option value="cmd_exec">CMD (Admin)</option>
+                  <option value="powershell_exec">PowerShell (Admin)</option>
+                  <option value="exit_password_set">Çıkış Parolası Güncelle (Admin)</option>
+                  {% endif %}
+                </select>
+              </div>
+
+              <div class="col-12 col-lg-6">
+                <div id="group-fields" class="vstack gap-2">
+                  <div class="group-field d-none" data-for="notify">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-4">
+                        <label class="form-label form-label-sm" for="g-notify-title">Başlık (opsiyonel)</label>
+                        <input id="g-notify-title" class="form-control form-control-sm" type="text" placeholder="Örn: Bilgi" />
+                      </div>
+                      <div class="col-12 col-md-8">
+                        <label class="form-label form-label-sm" for="g-notify-message">Mesaj</label>
+                        <input id="g-notify-message" class="form-control form-control-sm" type="text" placeholder="Örn: 5 dk sonra restart yapılacak." />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="service_control">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm" for="g-service-name">Servis adı</label>
+                        <input id="g-service-name" class="form-control form-control-sm mono" type="text" placeholder="Örn: w32time" />
+                      </div>
+                      <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm" for="g-service-action">İşlem</label>
+                        <select id="g-service-action" class="form-select form-select-sm">
+                          <option value="restart" selected>yeniden başlat</option>
+                          <option value="start">başlat</option>
+                          <option value="stop">durdur</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="processes_list">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-4">
+                        <label class="form-label form-label-sm" for="g-proc-top">Top</label>
+                        <input id="g-proc-top" class="form-control form-control-sm" type="number" min="1" max="300" step="1" value="60" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="process_kill">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm" for="g-proc-pid">PID (opsiyonel)</label>
+                        <input id="g-proc-pid" class="form-control form-control-sm" type="number" min="1" step="1" placeholder="1234" />
+                      </div>
+                      <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm" for="g-proc-name">Process adı (PID yoksa)</label>
+                        <input id="g-proc-name" class="form-control form-control-sm" type="text" placeholder="Örn: notepad" />
+                      </div>
+                      <div class="col-12">
+                        <div class="form-text">PID doldurursan isim dikkate alınmaz.</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="eventlog_recent">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-4">
+                        <label class="form-label form-label-sm" for="g-elog-log">Log</label>
+                        <select id="g-elog-log" class="form-select form-select-sm">
+                          <option value="System" selected>System</option>
+                          <option value="Application">Application</option>
+                          <option value="Security">Security</option>
+                        </select>
+                      </div>
+                      <div class="col-6 col-md-4">
+                        <label class="form-label form-label-sm" for="g-elog-hours">Saat</label>
+                        <input id="g-elog-hours" class="form-control form-control-sm" type="number" min="1" max="720" step="1" value="24" />
+                      </div>
+                      <div class="col-6 col-md-4">
+                        <label class="form-label form-label-sm" for="g-elog-max">Max kayıt</label>
+                        <input id="g-elog-max" class="form-control form-control-sm" type="number" min="1" max="2000" step="1" value="200" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="task_run">
+                    <div class="row g-2">
+                      <div class="col-12">
+                        <label class="form-label form-label-sm" for="g-task-tn">Görev adı (tam yol)</label>
+                        <input id="g-task-tn" class="form-control form-control-sm mono" type="text" placeholder="\\Microsoft\\Windows\\Defrag\\ScheduledDefrag" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="time_set">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm" for="g-time-iso">Tarih/Saat</label>
+                        <input id="g-time-iso" class="form-control form-control-sm" type="datetime-local" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {% if is_admin %}
+                  <div class="group-field d-none" data-for="cmd_exec">
+                    <div class="row g-2">
+                      <div class="col-12">
+                        <label class="form-label form-label-sm" for="g-cmd-command">CMD komutu</label>
+                        <input id="g-cmd-command" class="form-control form-control-sm mono" type="text" placeholder="ipconfig /all" />
+                      </div>
+                      <div class="col-12 col-md-4">
+                        <label class="form-label form-label-sm" for="g-cmd-timeout">Timeout (sn)</label>
+                        <input id="g-cmd-timeout" class="form-control form-control-sm" type="number" min="5" max="1800" step="1" value="120" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="powershell_exec">
+                    <div class="row g-2">
+                      <div class="col-12">
+                        <label class="form-label form-label-sm" for="g-ps-script">PowerShell script</label>
+                        <textarea id="g-ps-script" class="form-control form-control-sm mono" rows="4" placeholder="Get-Process | Select-Object -First 10 | ConvertTo-Json -Depth 3"></textarea>
+                      </div>
+                      <div class="col-12 col-md-4">
+                        <label class="form-label form-label-sm" for="g-ps-timeout">Timeout (sn)</label>
+                        <input id="g-ps-timeout" class="form-control form-control-sm" type="number" min="5" max="1800" step="1" value="120" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="exit_password_set">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm" for="g-exit-password">Yeni çıkış parolası</label>
+                        <input id="g-exit-password" class="form-control form-control-sm" type="password" autocomplete="new-password" />
+                      </div>
+                      <div class="col-12">
+                        <div class="form-text">Bu parola tüm seçili grup cihazlarının tray çıkışı için uygulanır.</div>
+                      </div>
+                    </div>
+                  </div>
+                  {% endif %}
+                </div>
+
+                <div id="group-no-fields" class="text-muted small d-none">Bu komut için ek alan yok.</div>
+              </div>
+
+              <div class="col-12 col-lg-2 d-grid">
+                <button class="btn btn-primary btn-sm" type="submit" onclick="return confirm('Seçili gruptaki tüm cihazlara bu komut gönderilsin mi?');">Gönder</button>
+              </div>
+            </div>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+    </div>
 
     <div class="row g-3 mb-4">
       <div class="col-12 col-md-6 col-lg-3">
@@ -210,9 +437,10 @@
               <tr>
                 <th style="width: 140px;">Durum</th>
                 <th>PC</th>
+                <th style="width: 180px;">Grup</th>
                 <th style="width: 160px;">IP</th>
                 <th style="width: 200px;">OS</th>
-                <th style="width: 220px;">Last Seen</th>
+                <th style="width: 180px;">Son Görülme</th>
                 <th style="width: 120px;"></th>
               </tr>
             </thead>
@@ -224,7 +452,7 @@
                   <div class="d-flex align-items-center gap-2">
                     <span class="status-dot {% if is_online %}bg-success{% else %}bg-secondary{% endif %}"></span>
                     <span class="badge {% if is_online %}text-bg-success{% else %}text-bg-secondary{% endif %}">
-                      {% if is_online %}online{% else %}offline{% endif %}
+                      {% if is_online %}Online{% else %}Offline{% endif %}
                     </span>
                   </div>
                 </td>
@@ -232,9 +460,12 @@
                   <div class="mono">{{ d.hostname }}</div>
                   <div class="text-muted small">Agent: <span class="mono">{{ d.agent_version or 'unknown' }}</span></div>
                 </td>
+                <td>
+                  <span class="badge text-bg-light">{{ d.group.name if d.group else '-' }}</span>
+                </td>
                 <td class="mono">{{ d.ip or '-' }}</td>
                 <td>{{ d.os or '-' }}</td>
-                <td class="small text-muted">{{ d.last_seen_at or '-' }}</td>
+                <td class="small text-muted" title="{{ d.last_seen_at|fmt_dt if d.last_seen_at else '-' }}">{{ d.last_seen_at|rel_time if d.last_seen_at else '-' }}</td>
                 <td class="text-end">
                   <a class="btn btn-primary btn-sm" href="/devices/{{ d.id }}{% if preselect_cmd %}?cmd={{ preselect_cmd }}{% endif %}">Aç</a>
                 </td>
@@ -254,10 +485,10 @@
 {% block scripts %}
 <script>
   function copyEnrollToken() {
-    const el = document.getElementById('enrollToken');
+    const el = document.getElementById('enrollTokenInp');
     const msg = document.getElementById('copyMsg');
     if (!el) return;
-    const t = (el.textContent || '').trim();
+    const t = (el.value || '').trim();
     if (!t) return;
     navigator.clipboard.writeText(t).then(() => {
       if (msg) msg.textContent = 'Kopyalandı';
@@ -268,6 +499,19 @@
     });
   }
 
+  // Clear one-off success message from URL so it doesn't persist on refresh.
+  {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('ok')) {
+      url.searchParams.delete('ok');
+      window.history.replaceState({}, '', url.toString());
+      const okAlert = document.getElementById('ok-alert');
+      if (okAlert) {
+        window.setTimeout(() => okAlert.remove(), 2500);
+      }
+    }
+  }
+
   // Row click → open detail
   for (const tr of document.querySelectorAll('table.table-alloy tbody tr')) {
     const a = tr.querySelector('a[href]');
@@ -275,6 +519,114 @@
     tr.addEventListener('click', (e) => {
       if (e.target && (e.target.closest('a,button,input,select,textarea,label'))) return;
       window.location.href = a.getAttribute('href');
+    });
+  }
+
+  // Group command form: show fields per command and build JSON payload.
+  const gForm = document.getElementById('group-command-form');
+  if (gForm) {
+    const typeSel = document.getElementById('group-cmd-type');
+    const payloadInp = document.getElementById('group-payload');
+    const fieldsRoot = document.getElementById('group-fields');
+    const noFields = document.getElementById('group-no-fields');
+
+    const showFieldsFor = (cmd) => {
+      if (!fieldsRoot) return;
+      const blocks = Array.from(fieldsRoot.querySelectorAll('.group-field'));
+      let anyVisible = false;
+      blocks.forEach((b) => {
+        const visible = b.dataset.for === cmd;
+        b.classList.toggle('d-none', !visible);
+        if (visible) anyVisible = true;
+      });
+      fieldsRoot.classList.toggle('d-none', !anyVisible);
+      if (noFields) noFields.classList.toggle('d-none', anyVisible);
+    };
+
+    const getVal = (id) => (document.getElementById(id)?.value ?? '').toString().trim();
+    const getInt = (id) => {
+      const v = getVal(id);
+      if (!v) return null;
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const buildPayload = (cmd) => {
+      if (cmd === 'notify') {
+        const title = getVal('g-notify-title');
+        const message = getVal('g-notify-message');
+        if (!title && !message) throw new Error('Mesaj boş olamaz.');
+        const out = {};
+        if (title) out.title = title;
+        if (message) out.message = message;
+        return out;
+      }
+      if (cmd === 'service_control') {
+        const name = getVal('g-service-name');
+        const action = (getVal('g-service-action') || 'restart').toLowerCase();
+        if (!name) throw new Error('Servis adı gerekli.');
+        return { name, action };
+      }
+      if (cmd === 'processes_list') {
+        const top = getInt('g-proc-top') ?? 60;
+        return { top };
+      }
+      if (cmd === 'process_kill') {
+        const pid = getInt('g-proc-pid');
+        const name = getVal('g-proc-name');
+        if (pid && pid > 0) return { pid };
+        if (name) return { name };
+        throw new Error('PID veya process adı gerekli.');
+      }
+      if (cmd === 'eventlog_recent') {
+        const log = getVal('g-elog-log') || 'System';
+        const hours = getInt('g-elog-hours') ?? 24;
+        const max = getInt('g-elog-max') ?? 200;
+        return { log, hours, max };
+      }
+      if (cmd === 'task_run') {
+        const tn = getVal('g-task-tn');
+        if (!tn) throw new Error('Task name (tam yol) gerekli.');
+        return { tn };
+      }
+      if (cmd === 'time_set') {
+        const iso = getVal('g-time-iso');
+        if (!iso) throw new Error('Tarih/saat gerekli.');
+        return { iso };
+      }
+      if (cmd === 'cmd_exec') {
+        const command = getVal('g-cmd-command');
+        const timeout = getInt('g-cmd-timeout') ?? 120;
+        if (!command) throw new Error('CMD komutu gerekli.');
+        return { command, timeout };
+      }
+      if (cmd === 'powershell_exec') {
+        const script = getVal('g-ps-script');
+        const timeout = getInt('g-ps-timeout') ?? 120;
+        if (!script) throw new Error('PowerShell script gerekli.');
+        return { script, timeout };
+      }
+      if (cmd === 'exit_password_set') {
+        const password = getVal('g-exit-password');
+        if (!password) throw new Error('Yeni çıkış parolası gerekli.');
+        return { password };
+      }
+      return {};
+    };
+
+    const sync = () => showFieldsFor((typeSel?.value || 'inventory').trim());
+    if (typeSel) typeSel.addEventListener('change', sync);
+    sync();
+
+    gForm.addEventListener('submit', (ev) => {
+      try {
+        const cmd = (typeSel?.value || '').trim();
+        const payload = buildPayload(cmd);
+        if (payloadInp) payloadInp.value = JSON.stringify(payload || {});
+      } catch (e) {
+        ev.preventDefault();
+        window.alert(e?.message || 'Payload hatalı.');
+      }
     });
   }
 </script>

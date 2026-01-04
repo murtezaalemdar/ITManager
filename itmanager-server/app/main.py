@@ -17,10 +17,12 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Plai
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
+from sqlalchemy import text
+from sqlalchemy.orm import selectinload
 
 from .auth import ensure_default_admin, generate_device_token, get_sso_user, verify_password
 from .db import Base, SessionLocal, engine
-from .models import Command, Device, ServerConfig, User
+from .models import Command, Device, Group, ServerConfig, User
 from .settings import settings
 
 app = FastAPI(title=settings.app_name)
@@ -133,9 +135,78 @@ def db_session():
         yield db
 
 
+def _ensure_groups_schema() -> None:
+    """Best-effort schema patching for existing MSSQL installs.
+
+    SQLAlchemy create_all() does not add columns to existing tables.
+    """
+
+    try:
+        with engine.begin() as conn:
+            # Create groups table if missing
+            conn.execute(
+                text(
+                    """
+IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'groups')
+BEGIN
+    CREATE TABLE groups (
+        id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        name NVARCHAR(128) NOT NULL UNIQUE,
+        created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+"""
+                )
+            )
+
+            # Add devices.group_id if missing
+            conn.execute(
+                text(
+                    """
+IF COL_LENGTH('devices', 'group_id') IS NULL
+BEGIN
+    ALTER TABLE devices ADD group_id INT NULL;
+END
+"""
+                )
+            )
+
+            # Index (best-effort)
+            conn.execute(
+                text(
+                    """
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes WHERE name = 'IX_devices_group_id' AND object_id = OBJECT_ID('devices')
+)
+BEGIN
+    CREATE INDEX IX_devices_group_id ON devices(group_id);
+END
+"""
+                )
+            )
+
+            # FK (best-effort)
+            conn.execute(
+                text(
+                    """
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_devices_groups_group_id')
+BEGIN
+    ALTER TABLE devices
+    ADD CONSTRAINT FK_devices_groups_group_id
+    FOREIGN KEY (group_id) REFERENCES groups(id);
+END
+"""
+                )
+            )
+    except Exception as e:
+        # Keep server booting even if migration fails.
+        print("WARN: groups schema migration failed:", e)
+
+
 @app.on_event("startup")
 def startup() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_groups_schema()
     ensure_default_admin()
 
 
@@ -285,7 +356,12 @@ def logout():
 def devices(request: Request, db=Depends(db_session)):
     user = require_panel_user(request)
     err = request.query_params.get("err")
+    ok = request.query_params.get("ok")
     preselect_cmd = request.query_params.get("cmd")
+    group_id_param = (request.query_params.get("group_id") or "").strip()
+    selected_group_id: int | None = None
+    if group_id_param.isdigit():
+        selected_group_id = int(group_id_param)
     cfg = get_or_init_server_config(db)
     online_cutoff = datetime.utcnow() - timedelta(seconds=settings.panel_online_cutoff_seconds)
     online_window_minutes = max(1, int(round(settings.panel_online_cutoff_seconds / 60)))
@@ -295,7 +371,12 @@ def devices(request: Request, db=Depends(db_session)):
         is_admin = bool(u and u.is_admin)
     except Exception:
         is_admin = False
-    rows = db.scalars(select(Device).order_by(Device.hostname)).all()
+    groups = db.scalars(select(Group).order_by(Group.name)).all()
+
+    q = select(Device).options(selectinload(Device.group)).order_by(Device.hostname)
+    if selected_group_id is not None:
+        q = q.where(Device.group_id == selected_group_id)
+    rows = db.scalars(q).all()
 
     total_devices = len(rows)
     online_devices = sum(1 for d in rows if d.last_seen_at and d.last_seen_at >= online_cutoff)
@@ -326,8 +407,11 @@ def devices(request: Request, db=Depends(db_session)):
             "user": user,
             "is_admin": is_admin,
             "err": err,
+            "ok": ok,
             "preselect_cmd": preselect_cmd,
             "enrollment_token": cfg.agent_enrollment_token,
+            "groups": groups,
+            "selected_group_id": selected_group_id,
             "devices": rows,
             "online_cutoff": online_cutoff,
             "online_window_minutes": online_window_minutes,
@@ -347,11 +431,13 @@ def devices(request: Request, db=Depends(db_session)):
 def device_detail(device_id: int, request: Request, db=Depends(db_session)):
     user = require_panel_user(request)
     err = request.query_params.get("err")
+    ok = request.query_params.get("ok")
     preselect_cmd = request.query_params.get("cmd")
 
-    dev = db.get(Device, device_id)
+    dev = db.scalar(select(Device).options(selectinload(Device.group)).where(Device.id == device_id))
     if not dev:
         raise HTTPException(status_code=404)
+    groups = db.scalars(select(Group).order_by(Group.name)).all()
 
     online_cutoff = datetime.utcnow() - timedelta(seconds=settings.panel_online_cutoff_seconds)
     online_window_minutes = max(1, int(round(settings.panel_online_cutoff_seconds / 60)))
@@ -416,8 +502,10 @@ def device_detail(device_id: int, request: Request, db=Depends(db_session)):
             "user": user,
             "is_admin": is_admin,
             "err": err,
+            "ok": ok,
             "preselect_cmd": preselect_cmd,
             "device": dev,
+            "groups": groups,
             "online_cutoff": online_cutoff,
             "online_window_minutes": online_window_minutes,
             "recent_commands": recent_commands,
@@ -644,6 +732,126 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest().upper()
 
 
+def _fmt_tr_int(n: int) -> str:
+    # Turkish-friendly thousands separator (.)
+    return f"{int(n):,}".replace(",", ".")
+
+
+def _fmt_tr_float(x: float, decimals: int = 1) -> str:
+    s = f"{float(x):.{decimals}f}"
+    return s.replace(".", ",")
+
+
+def _fmt_bytes_tr(n: Any) -> str:
+    try:
+        b = float(n)
+    except Exception:
+        return str(n)
+    if b < 0:
+        return str(n)
+
+    units = [
+        (1024.0**4, "TB", 1),
+        (1024.0**3, "GB", 1),
+        (1024.0**2, "MB", 0),
+        (1024.0, "KB", 0),
+    ]
+    for div, unit, dec in units:
+        if b >= div:
+            return f"{_fmt_tr_float(b / div, dec)} {unit}"
+    return f"{_fmt_tr_int(int(b))} B"
+
+
+def _format_inventory_for_ui(inv: dict[str, Any]) -> dict[str, Any]:
+    # Build an ordered mapping for nicer UI rendering.
+    ordered_keys = [
+        "ts",
+        "hostname",
+        "platform",
+        "machine",
+        "processor",
+        "python",
+        "ram_total",
+        "ram_available",
+        "cpu_count",
+        "disks",
+    ]
+
+    out: dict[str, Any] = {}
+
+    # Copy known keys in a stable order.
+    for k in ordered_keys:
+        if k in inv:
+            out[k] = inv.get(k)
+
+    # Append any remaining keys (rare/new fields).
+    for k, v in inv.items():
+        if k not in out:
+            out[k] = v
+
+    # Pretty conversions
+    ts = out.get("ts")
+    if isinstance(ts, str):
+        pretty = _try_pretty_tr_datetime_from_iso(ts)
+        if pretty:
+            out["ts"] = pretty
+
+    for k in ("ram_total", "ram_available"):
+        if k in out:
+            try:
+                raw = int(float(out.get(k) or 0))
+                out[k] = f"{_fmt_bytes_tr(raw)} ({_fmt_tr_int(raw)} B)"
+            except Exception:
+                pass
+
+    if "cpu_count" in out:
+        try:
+            out["cpu_count"] = int(out.get("cpu_count") or 0)
+        except Exception:
+            pass
+
+    # Disks: replace long raw list with a compact table-friendly structure.
+    disks = inv.get("disks")
+    if isinstance(disks, list) and disks and all(isinstance(d, dict) for d in disks):
+        rows: list[dict[str, Any]] = []
+        for d in disks:
+            try:
+                total = int(float(d.get("total") or 0))
+                used = int(float(d.get("used") or 0))
+                free = int(float(d.get("free") or 0))
+            except Exception:
+                total = used = free = 0
+
+            pct = "-"
+            try:
+                if total > 0:
+                    pct = f"{_fmt_tr_float((used / total) * 100.0, 1)}%"
+            except Exception:
+                pct = "-"
+
+            drive = (d.get("mount") or d.get("device") or "")
+            rows.append(
+                {
+                    "Sürücü": str(drive),
+                    "FS": str(d.get("fstype") or ""),
+                    "Toplam": _fmt_bytes_tr(total),
+                    "Kullanılan": _fmt_bytes_tr(used),
+                    "Boş": _fmt_bytes_tr(free),
+                    "Doluluk": pct,
+                }
+            )
+
+        out["disks"] = rows
+    elif "disks" in out:
+        # At least show a short summary.
+        try:
+            out["disks"] = f"{len(disks) if isinstance(disks, list) else 0} disk"
+        except Exception:
+            pass
+
+    return out
+
+
 def _get_latest_release(platform: str) -> dict[str, Any] | None:
     plat = (platform or "").strip().lower()
     if plat not in {"windows"}:
@@ -804,6 +1012,11 @@ def _decorate_command_for_ui(c: Command) -> None:
 
     # Inventory summary (also helpful in recent commands)
     if cmd_type in ("inventory", "get_inventory") and isinstance(parsed, dict):
+        # Make inventory output readable (bytes -> GB, disks -> table).
+        try:
+            c.ui_stdout_json = _format_inventory_for_ui(parsed)
+        except Exception:
+            pass
         try:
             ram_gb = round(float(parsed.get("ram_total", 0)) / 1024 / 1024 / 1024, 1)
         except Exception:
@@ -872,7 +1085,10 @@ def _build_inventory_by_device(recent_commands_by_device: dict[int, list[Command
             inv = json.loads(inv_cmd.stdout)
             if isinstance(inv, dict):
                 inv["_command_id"] = inv_cmd.id
-                out[device_id] = inv
+                try:
+                    out[device_id] = _format_inventory_for_ui(inv)
+                except Exception:
+                    out[device_id] = inv
         except Exception:
             continue
     return out
@@ -963,6 +1179,183 @@ def send_command(
     db.commit()
 
     return RedirectResponse(f"/devices/{device_id}?cmd={quote((type or '').strip())}&sent=1", status_code=302)
+
+
+@app.post("/devices/{device_id}/group")
+def set_device_group(
+    device_id: int,
+    request: Request,
+    group_id: str = Form(""),
+    db=Depends(db_session),
+):
+    require_admin_user(request, db)
+
+    dev = db.get(Device, device_id)
+    if not dev:
+        raise HTTPException(status_code=404)
+
+    raw = (group_id or "").strip()
+    if not raw:
+        dev.group_id = None
+        db.commit()
+        return RedirectResponse(f"/devices/{device_id}?ok=group_cleared", status_code=302)
+
+    if not raw.isdigit():
+        msg = "Geçersiz grup"
+        return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
+
+    gid = int(raw)
+    grp = db.get(Group, gid)
+    if not grp:
+        msg = "Grup bulunamadı"
+        return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
+
+    dev.group_id = gid
+    db.commit()
+    return RedirectResponse(f"/devices/{device_id}?ok=group_saved", status_code=302)
+
+
+@app.post("/groups/create")
+def create_group(
+    request: Request,
+    name: str = Form(""),
+    db=Depends(db_session),
+):
+    require_admin_user(request, db)
+
+    n = (name or "").strip()
+    if not n:
+        msg = "Grup adı boş olamaz"
+        return RedirectResponse(f"/devices?err={quote(msg)}", status_code=302)
+    if len(n) > 128:
+        msg = "Grup adı çok uzun"
+        return RedirectResponse(f"/devices?err={quote(msg)}", status_code=302)
+
+    existing = db.scalar(select(Group).where(Group.name == n))
+    if existing:
+        return RedirectResponse(f"/devices?group_id={existing.id}", status_code=302)
+
+    g = Group(name=n)
+    db.add(g)
+    db.commit()
+    db.refresh(g)
+    return RedirectResponse(f"/devices?group_id={g.id}", status_code=302)
+
+
+@app.post("/groups/{group_id}/command")
+def send_group_command(
+    group_id: int,
+    request: Request,
+    type: str = Form(...),
+    payload: str = Form("{}"),
+    db=Depends(db_session),
+):
+    require_panel_user(request)
+
+    grp = db.get(Group, group_id)
+    if not grp:
+        raise HTTPException(status_code=404)
+
+    allowed_types = {
+        "inventory",
+        "notify",
+        "restart",
+        "shutdown",
+        "agent_update",
+        "w32time_resync",
+        "w32time_restart",
+        "w32time_status",
+        "time_get",
+        "time_set",
+        "services_list",
+        "service_control",
+        "processes_list",
+        "process_kill",
+        "eventlog_recent",
+        "task_list",
+        "task_run",
+        "cmd_exec",
+        "powershell_exec",
+        "exit_password_set",
+    }
+    cmd_type = (type or "").strip()
+    if cmd_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="invalid command type")
+
+    # High-risk commands are admin-only.
+    if cmd_type in {"cmd_exec", "powershell_exec", "exit_password_set"}:
+        require_admin_user(request, db)
+
+    # validate payload is JSON
+    try:
+        parsed_payload = json.loads(payload or "{}")
+    except Exception:
+        parsed_payload = {}
+
+    # Never store plaintext passwords in DB. Convert to a salted hash payload.
+    if cmd_type == "exit_password_set":
+        try:
+            if not isinstance(parsed_payload, dict):
+                raise ValueError("payload must be an object")
+            pw = str(parsed_payload.get("password") or "").strip()
+            if not pw:
+                raise ValueError("password is required")
+            salt = secrets.token_bytes(16)
+            iters = 150_000
+            dk = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, iters)
+            parsed_payload = {
+                "algo": "pbkdf2_sha256",
+                "salt_b64": base64.b64encode(salt).decode("ascii"),
+                "hash_b64": base64.b64encode(dk).decode("ascii"),
+                "iters": iters,
+            }
+        except Exception:
+            msg = "Parola güncelleme: geçersiz payload (password gerekli)"
+            return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
+
+    devices = db.scalars(select(Device).where(Device.group_id == group_id)).all()
+    if not devices:
+        msg = f"Grup '{grp.name}': cihaz yok"
+        return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
+
+    queued = 0
+    skipped = 0
+    for dev in devices:
+        # Feature gating by agent version (prevents confusing 'unknown command type').
+        if cmd_type in {"notify", "cmd_exec", "powershell_exec"}:
+            try:
+                if not _require_min_agent_version(dev, "0.2.0"):
+                    skipped += 1
+                    continue
+            except Exception:
+                skipped += 1
+                continue
+
+        if cmd_type == "exit_password_set":
+            try:
+                if not _require_min_agent_version(dev, "0.2.13"):
+                    skipped += 1
+                    continue
+            except Exception:
+                skipped += 1
+                continue
+
+        db.add(
+            Command(
+                device_id=dev.id,
+                type=cmd_type,
+                payload_json=json.dumps(parsed_payload),
+                status="queued",
+            )
+        )
+        queued += 1
+
+    db.commit()
+
+    msg = f"Grup '{grp.name}': {queued} cihaz için '{cmd_type}' kuyruğa alındı"
+    if skipped:
+        msg += f" (skip: {skipped})"
+    return RedirectResponse(f"/devices?group_id={group_id}&ok={quote(msg)}", status_code=302)
 
 
 @app.post("/devices/{device_id}/exit_password")

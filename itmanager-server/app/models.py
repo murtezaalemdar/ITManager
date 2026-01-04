@@ -8,6 +8,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
 
+class Group(Base):
+    __tablename__ = "groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    devices: Mapped[list[Device]] = relationship(back_populates="group")
+
+
 class Device(Base):
     __tablename__ = "devices"
 
@@ -19,6 +29,10 @@ class Device(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     os: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"), nullable=True, index=True)
+
+    group: Mapped[Group | None] = relationship(back_populates="devices")
 
     commands: Mapped[list[Command]] = relationship(back_populates="device")
 
