@@ -1,0 +1,383 @@
+{% extends "base.html" %}
+
+{% block title %}ITManager | Dashboard{% endblock %}
+
+{% block container_class %}container-fluid p-0{% endblock %}
+
+{% block navbar %}
+<nav class="navbar navbar-expand-lg dash-navbar">
+  <div class="container">
+    <a class="navbar-brand d-flex align-items-center gap-2 text-white" href="/dashboard">
+      <span class="brand-badge bg-white text-primary">IT</span>
+      <span class="fw-bold">ITManager</span>
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="nav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link text-white-50 active" href="/dashboard">Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link text-white-50" href="/devices">Cihazlar</a></li>
+      </ul>
+      <div class="d-flex align-items-center gap-2">
+        <div class="small text-white-50">Kullanıcı: <span class="text-white fw-semibold">{{ user }}</span></div>
+        <a class="btn btn-sm btn-danger" href="/logout">Çıkış</a>
+      </div>
+    </div>
+  </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<style>
+  .dash-bg {
+    min-height: calc(100vh - 66px);
+    background:
+      radial-gradient(1200px circle at 15% 0%, rgba(var(--bs-primary-rgb), .42), transparent 55%),
+      radial-gradient(900px circle at 85% 10%, rgba(var(--bs-info-rgb), .35), transparent 50%),
+      radial-gradient(800px circle at 40% 100%, rgba(var(--bs-success-rgb), .25), transparent 50%),
+      linear-gradient(135deg, rgba(var(--bs-primary-rgb), .75), rgba(var(--bs-info-rgb), .55) 45%, rgba(var(--bs-success-rgb), .45));
+  }
+  .dash-navbar {
+    background: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, .18);
+  }
+  .dash-navbar .navbar-toggler {
+    border-color: rgba(255, 255, 255, .35);
+  }
+  .dash-navbar .navbar-toggler-icon {
+    filter: invert(1);
+  }
+  .dash-title {
+    text-shadow: 0 1px 0 rgba(0,0,0,.10);
+  }
+  .dash-subtitle {
+    color: rgba(255, 255, 255, .85);
+  }
+  .dash-tile {
+    border: 0;
+    border-radius: 18px;
+    color: #fff;
+    overflow: hidden;
+    box-shadow: var(--bs-box-shadow-sm);
+    transition: transform .12s ease, filter .12s ease;
+    text-decoration: none;
+    display: block;
+  }
+  .dash-tile:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.02);
+  }
+  .dash-tile-body {
+    padding: 18px;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .dash-tile-kicker {
+    opacity: .9;
+    font-size: .9rem;
+  }
+  .dash-tile-value {
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    font-size: 2rem;
+    line-height: 1.1;
+  }
+  .dash-tile-hint {
+    opacity: .85;
+    font-size: .9rem;
+  }
+  .dash-tile--devices {
+    background: linear-gradient(135deg, rgba(var(--bs-primary-rgb), .95), rgba(var(--bs-info-rgb), .78));
+  }
+  .dash-tile--online {
+    background: linear-gradient(135deg, rgba(var(--bs-success-rgb), .92), rgba(var(--bs-info-rgb), .70));
+  }
+  .dash-tile--offline {
+    background: linear-gradient(135deg, rgba(var(--bs-secondary-rgb), .92), rgba(var(--bs-primary-rgb), .55));
+  }
+  .dash-tile--commands {
+    background: linear-gradient(135deg, rgba(var(--bs-warning-rgb), .92), rgba(var(--bs-danger-rgb), .70));
+  }
+  .glass {
+    border-radius: 18px;
+    background: rgba(var(--bs-body-bg-rgb), .78);
+    border: 1px solid rgba(255, 255, 255, .28);
+    box-shadow: var(--bs-box-shadow-sm);
+    backdrop-filter: blur(10px);
+  }
+
+  .glass-strong {
+    background: rgba(var(--bs-body-bg-rgb), .86);
+    border: 1px solid rgba(255, 255, 255, .34);
+    box-shadow: var(--bs-box-shadow);
+  }
+  .summary-card {
+    border-radius: 16px;
+    background: rgba(var(--bs-body-bg-rgb), .92);
+    border: 1px solid rgba(var(--bs-black-rgb), .06);
+    box-shadow: var(--bs-box-shadow-sm);
+    backdrop-filter: blur(8px);
+  }
+  .summary-title {
+    letter-spacing: -0.01em;
+  }
+  .summary-sub {
+    color: rgba(var(--bs-black-rgb), .60);
+  }
+  .summary-top {
+    padding: 14px 14px 0 14px;
+    border-bottom: 1px solid rgba(var(--bs-black-rgb), .06);
+  }
+  .summary-body {
+    padding: 14px;
+  }
+  @media (min-width: 768px) {
+    .summary-top { padding: 18px 18px 0 18px; }
+    .summary-body { padding: 18px; }
+  }
+
+  .donut {
+    width: 104px;
+    height: 104px;
+    display: grid;
+    place-items: center;
+  }
+  .donut svg {
+    width: 104px;
+    height: 104px;
+    transform: rotate(-90deg);
+  }
+  .donut .bg {
+    stroke: var(--bs-border-color);
+    opacity: 0.35;
+  }
+  .donut .fg {
+    stroke: var(--donut-color, var(--bs-primary));
+    stroke-linecap: round;
+  }
+  .donut circle {
+    fill: none;
+    stroke-width: 11;
+  }
+  .donut svg {
+    filter: drop-shadow(var(--bs-box-shadow-sm));
+  }
+  .donut--lg { width: 132px; height: 132px; }
+  .donut--lg svg { width: 132px; height: 132px; }
+  .donut--lg .donut-center { width: 112px; height: 112px; }
+  .donut--lg circle { stroke-width: 12; }
+  .donut-center {
+    position: absolute;
+    width: 104px;
+    height: 104px;
+    display: grid;
+    place-items: center;
+  }
+  .donut-center .value {
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+  .donut-center .label {
+    font-size: 0.8rem;
+    color: var(--bs-secondary-color);
+    margin-top: 2px;
+    text-transform: lowercase;
+  }
+</style>
+
+<div class="dash-bg">
+  <div class="container py-4">
+    <div class="text-center mb-4">
+      <h1 class="display-6 fw-bold text-white dash-title mb-1">Dashboard</h1>
+      <div class="dash-subtitle">Online sayımı son {{ online_window_label }} içinde konuşan cihazlara göre.</div>
+    </div>
+
+    <div class="row g-3 mb-4">
+      <div class="col-12 col-md-6 col-lg-3">
+        <a class="dash-tile dash-tile--devices" href="/devices">
+          <div class="dash-tile-body">
+            <div class="dash-tile-kicker">Toplam Cihaz</div>
+            <div class="dash-tile-value">{{ total_devices }}</div>
+            <div class="dash-tile-hint">Tüm cihaz listesini aç</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <a class="dash-tile dash-tile--online" href="/devices">
+          <div class="dash-tile-body">
+            <div class="dash-tile-kicker">Online</div>
+            <div class="dash-tile-value">{{ online_devices }}</div>
+            <div class="dash-tile-hint">Şu an aktif cihazlar</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <a class="dash-tile dash-tile--offline" href="/devices">
+          <div class="dash-tile-body">
+            <div class="dash-tile-kicker">Offline</div>
+            <div class="dash-tile-value">{{ offline_devices }}</div>
+            <div class="dash-tile-hint">Ulaşılmayan cihazlar</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <a class="dash-tile dash-tile--commands" href="#dash-summary">
+          <div class="dash-tile-body">
+            <div class="dash-tile-kicker">Toplam Komut</div>
+            <div class="dash-tile-value">{{ total_commands }}</div>
+            <div class="dash-tile-hint">Grafikli özete git</div>
+          </div>
+        </a>
+      </div>
+    </div>
+
+    <div id="dash-summary" class="glass glass-strong">
+      <div class="summary-top d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <div>
+          <h2 class="h5 mb-1 summary-title">Grafikli Özet</h2>
+          <div class="small summary-sub">Cihaz ve komut durumlarını tek bakışta gör.</div>
+        </div>
+        <a class="btn btn-primary btn-sm" href="/devices">Cihazlara Git</a>
+      </div>
+
+      <div class="summary-body">
+        <div class="row g-3">
+        <div class="col-12 col-lg-6">
+          <div class="summary-card h-100">
+            <div class="p-3 p-md-4">
+            <div class="d-flex align-items-center justify-content-between gap-3">
+              <div>
+                <div class="fw-semibold">Cihaz Durumu</div>
+                <div class="text-muted small">Online oranı ({{ online_window_label }} penceresi)</div>
+                <div class="mt-2 d-flex flex-wrap gap-2">
+                  <span class="badge text-bg-success">Online: {{ online_devices }}</span>
+                  <span class="badge text-bg-secondary">Offline: {{ offline_devices }}</span>
+                  <span class="badge text-bg-light text-dark border">Toplam: {{ total_devices }}</span>
+                </div>
+              </div>
+              <div class="position-relative donut donut--lg" style="--donut-color: var(--bs-success);">
+                <div class="donut-center">
+                  <div class="text-center">
+                    <div class="value">{{ devices_online_pct }}%</div>
+                    <div class="label">online</div>
+                  </div>
+                </div>
+                <svg viewBox="0 0 100 100" aria-hidden="true">
+                  <circle class="bg" cx="50" cy="50" r="38" pathLength="100"></circle>
+                  <circle class="fg" cx="50" cy="50" r="38" pathLength="100" style="stroke-dasharray: {{ devices_online_pct }} 100;"></circle>
+                </svg>
+              </div>
+            </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12 col-lg-6">
+          <div class="summary-card h-100">
+            <div class="p-3 p-md-4">
+              <div class="d-flex align-items-start justify-content-between gap-2 flex-wrap">
+                <div>
+                  <div class="fw-semibold">Komut Durumu</div>
+                  <div class="text-muted small">Toplam komut: {{ total_commands }}</div>
+                </div>
+                <div class="text-muted small">Dağılım</div>
+              </div>
+
+            <div class="row g-3 mt-2">
+              <div class="col-6 col-md-3">
+                <div class="d-flex align-items-center gap-2">
+                  <div class="position-relative donut" style="--donut-color: var(--bs-warning); width: 84px; height: 84px;">
+                    <div class="donut-center" style="width: 84px; height: 84px;">
+                      <div class="text-center">
+                        <div class="value" style="font-size: 1.1rem;">{{ queued_pct }}%</div>
+                        <div class="label" style="font-size: 0.75rem;">queued</div>
+                      </div>
+                    </div>
+                    <svg viewBox="0 0 100 100" aria-hidden="true" style="width: 84px; height: 84px;">
+                      <circle class="bg" cx="50" cy="50" r="38" pathLength="100"></circle>
+                      <circle class="fg" cx="50" cy="50" r="38" pathLength="100" style="stroke-dasharray: {{ queued_pct }} 100;"></circle>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="small text-muted">Queued</div>
+                    <div class="fw-bold">{{ queued_commands }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-6 col-md-3">
+                <div class="d-flex align-items-center gap-2">
+                  <div class="position-relative donut" style="--donut-color: var(--bs-primary); width: 84px; height: 84px;">
+                    <div class="donut-center" style="width: 84px; height: 84px;">
+                      <div class="text-center">
+                        <div class="value" style="font-size: 1.1rem;">{{ running_pct }}%</div>
+                        <div class="label" style="font-size: 0.75rem;">running</div>
+                      </div>
+                    </div>
+                    <svg viewBox="0 0 100 100" aria-hidden="true" style="width: 84px; height: 84px;">
+                      <circle class="bg" cx="50" cy="50" r="38" pathLength="100"></circle>
+                      <circle class="fg" cx="50" cy="50" r="38" pathLength="100" style="stroke-dasharray: {{ running_pct }} 100;"></circle>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="small text-muted">Running</div>
+                    <div class="fw-bold">{{ running_commands }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-6 col-md-3">
+                <div class="d-flex align-items-center gap-2">
+                  <div class="position-relative donut" style="--donut-color: var(--bs-success); width: 84px; height: 84px;">
+                    <div class="donut-center" style="width: 84px; height: 84px;">
+                      <div class="text-center">
+                        <div class="value" style="font-size: 1.1rem;">{{ success_pct }}%</div>
+                        <div class="label" style="font-size: 0.75rem;">success</div>
+                      </div>
+                    </div>
+                    <svg viewBox="0 0 100 100" aria-hidden="true" style="width: 84px; height: 84px;">
+                      <circle class="bg" cx="50" cy="50" r="38" pathLength="100"></circle>
+                      <circle class="fg" cx="50" cy="50" r="38" pathLength="100" style="stroke-dasharray: {{ success_pct }} 100;"></circle>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="small text-muted">Success</div>
+                    <div class="fw-bold">{{ success_commands }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-6 col-md-3">
+                <div class="d-flex align-items-center gap-2">
+                  <div class="position-relative donut" style="--donut-color: var(--bs-danger); width: 84px; height: 84px;">
+                    <div class="donut-center" style="width: 84px; height: 84px;">
+                      <div class="text-center">
+                        <div class="value" style="font-size: 1.1rem;">{{ failed_pct }}%</div>
+                        <div class="label" style="font-size: 0.75rem;">failed</div>
+                      </div>
+                    </div>
+                    <svg viewBox="0 0 100 100" aria-hidden="true" style="width: 84px; height: 84px;">
+                      <circle class="bg" cx="50" cy="50" r="38" pathLength="100"></circle>
+                      <circle class="fg" cx="50" cy="50" r="38" pathLength="100" style="stroke-dasharray: {{ failed_pct }} 100;"></circle>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="small text-muted">Failed</div>
+                    <div class="fw-bold">{{ failed_commands }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+

@@ -1,0 +1,704 @@
+{% extends "base.html" %}
+
+{% block title %}ITManager | {{ device.hostname }}{% endblock %}
+
+{% block container_class %}container-fluid p-0{% endblock %}
+
+{% block head %}
+<style>
+  .dash-bg {
+    min-height: calc(100vh - 66px);
+    background:
+      radial-gradient(1200px circle at 15% 0%, rgba(var(--bs-primary-rgb), .42), transparent 55%),
+      radial-gradient(900px circle at 85% 10%, rgba(var(--bs-info-rgb), .35), transparent 50%),
+      radial-gradient(800px circle at 40% 100%, rgba(var(--bs-success-rgb), .25), transparent 50%),
+      linear-gradient(135deg, rgba(var(--bs-primary-rgb), .75), rgba(var(--bs-info-rgb), .55) 45%, rgba(var(--bs-success-rgb), .45));
+  }
+  .dash-navbar {
+    background: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, .18);
+  }
+  .dash-navbar .navbar-toggler {
+    border-color: rgba(255, 255, 255, .35);
+  }
+  .dash-navbar .navbar-toggler-icon {
+    filter: invert(1);
+  }
+  .dash-title {
+    text-shadow: 0 1px 0 rgba(0,0,0,.10);
+  }
+  .dash-subtitle {
+    color: rgba(255, 255, 255, .85);
+  }
+
+  .device-meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: .4rem .6rem;
+  }
+  .device-meta-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: .35rem;
+    padding: .25rem .6rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, .22);
+    background: rgba(255, 255, 255, .10);
+    max-width: 100%;
+  }
+  .device-meta-label {
+    font-weight: 700;
+    opacity: .95;
+  }
+  .device-meta-value {
+    display: inline-block;
+    max-width: min(520px, 76vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (min-width: 768px) {
+    .device-meta-value { max-width: 360px; }
+  }
+  @media (min-width: 1200px) {
+    .device-meta-value { max-width: 520px; }
+  }
+  .glass {
+    border-radius: 18px;
+    background: rgba(var(--bs-body-bg-rgb), .80);
+    border: 1px solid rgba(255, 255, 255, .28);
+    box-shadow: var(--bs-box-shadow-sm);
+    backdrop-filter: blur(10px);
+  }
+
+  .tile-panel {
+    border-radius: 22px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, .22);
+    box-shadow: var(--bs-box-shadow);
+    background: rgba(var(--bs-body-bg-rgb), .84);
+    backdrop-filter: blur(10px);
+  }
+  .tile-panel-hdr {
+    padding: 18px 18px 14px 18px;
+    color: #fff;
+  }
+  .tile-panel-hdr .title {
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    font-size: 1.15rem;
+    line-height: 1.2;
+  }
+  .tile-panel-hdr .sub {
+    opacity: .9;
+    font-size: .92rem;
+  }
+  .tile-panel-body {
+    padding: 18px;
+    background: rgba(var(--bs-body-bg-rgb), .92);
+  }
+  @media (min-width: 768px) {
+    .tile-panel-hdr { padding: 20px 20px 16px 20px; }
+    .tile-panel-body { padding: 20px; }
+  }
+
+  .tile-panel-hdr--purple {
+    background: linear-gradient(135deg, rgba(var(--bs-primary-rgb), .72), rgba(var(--bs-info-rgb), .50));
+  }
+  .tile-panel-hdr--blue {
+    background: linear-gradient(135deg, rgba(var(--bs-info-rgb), .70), rgba(var(--bs-primary-rgb), .50));
+  }
+  .tile-panel-hdr--green {
+    background: linear-gradient(135deg, rgba(var(--bs-success-rgb), .70), rgba(var(--bs-info-rgb), .45));
+  }
+
+  .cmd-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .5rem;
+  }
+  @media (min-width: 768px) {
+    .cmd-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (min-width: 1200px) {
+    .cmd-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+  .cmd-btn {
+    border-radius: 14px;
+    text-align: left;
+    padding: .65rem .75rem;
+    border: 0;
+    color: #fff;
+    box-shadow: var(--bs-box-shadow-sm);
+    transition: transform .12s ease, filter .12s ease;
+  }
+  .cmd-btn:hover { transform: translateY(-1px); filter: brightness(1.02); }
+  .cmd-btn:disabled { filter: grayscale(.25) brightness(.92); opacity: .75; box-shadow: none; }
+  .cmd-btn .cmd-title { font-weight: 700; line-height: 1.15; }
+  .cmd-btn .cmd-sub { font-size: .82rem; color: rgba(255,255,255,.88); margin-top: .15rem; }
+  .cmd-btn.is-active {
+    outline: 2px solid rgba(255,255,255,.80);
+  }
+
+  .cmd-btn--purple { background: linear-gradient(135deg, rgba(var(--bs-primary-rgb), .92), rgba(var(--bs-info-rgb), .74)); }
+  .cmd-btn--blue { background: linear-gradient(135deg, rgba(var(--bs-info-rgb), .92), rgba(var(--bs-primary-rgb), .70)); }
+  .cmd-btn--green { background: linear-gradient(135deg, rgba(var(--bs-success-rgb), .92), rgba(var(--bs-info-rgb), .70)); }
+  .cmd-btn--orange { background: linear-gradient(135deg, rgba(var(--bs-warning-rgb), .92), rgba(var(--bs-danger-rgb), .72)); }
+  .cmd-btn--red { background: linear-gradient(135deg, rgba(var(--bs-danger-rgb), .92), rgba(var(--bs-warning-rgb), .65)); }
+  .cmd-btn--gray { background: linear-gradient(135deg, rgba(var(--bs-secondary-rgb), .92), rgba(var(--bs-primary-rgb), .60)); }
+
+  .recent-commands { max-height: 520px; overflow: auto; }
+  .recent-command-card { padding: .5rem !important; }
+</style>
+{% endblock %}
+
+{% block navbar %}
+<nav class="navbar navbar-expand-lg dash-navbar">
+  <div class="container">
+    <a class="navbar-brand d-flex align-items-center gap-2 text-white" href="/dashboard">
+      <span class="brand-badge bg-white text-primary">IT</span>
+      <span class="fw-bold">ITManager</span>
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="nav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link text-white-50" href="/dashboard">Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link text-white-50 active" href="/devices">Cihazlar</a></li>
+      </ul>
+      <div class="d-flex align-items-center gap-3">
+        <div class="small text-white-50">Kullanıcı: <span class="text-white fw-semibold">{{ user }}</span></div>
+        <a class="btn btn-danger btn-sm" href="/logout">Çıkış</a>
+      </div>
+    </div>
+  </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+
+<div class="dash-bg">
+  <div class="container py-4">
+    <div class="text-center mb-4">
+      <h1 class="display-6 fw-bold text-white dash-title mb-1">{{ device.hostname }}</h1>
+      <div class="dash-subtitle device-meta" aria-label="Cihaz bilgileri">
+        <span class="device-meta-item">
+          <span class="device-meta-label">IP</span>
+          <span class="device-meta-value mono" title="{{ device.ip or '-' }}">{{ device.ip or '-' }}</span>
+        </span>
+        <span class="device-meta-item">
+          <span class="device-meta-label">OS</span>
+          <span class="device-meta-value" title="{{ device.os or '-' }}">{{ device.os or '-' }}</span>
+        </span>
+        <span class="device-meta-item">
+          <span class="device-meta-label">Agent</span>
+          <span class="device-meta-value mono" title="{{ device.agent_version or 'unknown' }}">{{ device.agent_version or 'unknown' }}</span>
+        </span>
+        <span class="device-meta-item">
+          <span class="device-meta-label">Son Görülme</span>
+          <span class="device-meta-value" title="{{ device.last_seen_at|fmt_dt }}">{{ device.last_seen_at|rel_time }}</span>
+        </span>
+      </div>
+      <div class="dash-subtitle small mt-1">Online sayılır: son {{ online_window_minutes }} dk içinde</div>
+      <div class="mt-2 d-flex justify-content-center align-items-center gap-2 flex-wrap">
+        <a class="btn btn-light btn-sm rounded-pill px-3" href="/devices">← Liste</a>
+        {% if device.last_seen_at and device.last_seen_at >= online_cutoff %}
+          <span class="badge rounded-pill text-bg-success px-3 py-2 fw-semibold">online</span>
+        {% else %}
+          <span class="badge rounded-pill text-bg-secondary px-3 py-2 fw-semibold">offline</span>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if err %}
+    <div class="alert alert-danger" role="alert">{{ err }}</div>
+    {% endif %}
+
+    <div class="row g-3">
+      <div class="col-12">
+        <div class="tile-panel">
+          <div class="tile-panel-hdr tile-panel-hdr--purple d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+              <div class="title">Komut Gönder</div>
+              <div class="sub">Bu cihaz için komut kuyruğa alınır.</div>
+            </div>
+          </div>
+          <div class="tile-panel-body">
+
+        <form method="post" action="/devices/{{ device.id }}/command" class="mt-2">
+          <input type="hidden" name="type" class="cmd-type" value="inventory" />
+
+          <div class="cmd-grid">
+            <button type="button" class="btn cmd-btn cmd-btn--blue" data-cmd="inventory">
+              <div class="cmd-title">Envanter Topla</div>
+              <div class="cmd-sub">Donanım ve sistem bilgisi</div>
+            </button>
+
+            {% if device.ui_supports_notify %}
+            <button type="button" class="btn cmd-btn cmd-btn--purple" data-cmd="notify">
+              <div class="cmd-title">Kullanıcıya Mesaj Gönder</div>
+              <div class="cmd-sub">Bildirim/mesaj</div>
+            </button>
+            {% else %}
+            <button type="button" class="btn cmd-btn cmd-btn--purple" data-cmd="notify" disabled title="Agent >= 0.2.0 gerekli">
+              <div class="cmd-title">Kullanıcıya Mesaj Gönder</div>
+              <div class="cmd-sub">agent>=0.2.0 gerekli</div>
+            </button>
+            {% endif %}
+
+            <button type="button" class="btn cmd-btn cmd-btn--green" data-cmd="services_list">
+              <div class="cmd-title">Servisleri Listele</div>
+              <div class="cmd-sub">Windows servisleri</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--green" data-cmd="service_control">
+              <div class="cmd-title">Servis Başlat/Durdur/Restart</div>
+              <div class="cmd-sub">Tek servis işlemi</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--blue" data-cmd="processes_list">
+              <div class="cmd-title">Process List</div>
+              <div class="cmd-sub">Çalışan process’ler</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--orange" data-cmd="process_kill">
+              <div class="cmd-title">Process Kill</div>
+              <div class="cmd-sub">PID ile sonlandır</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--orange" data-cmd="eventlog_recent">
+              <div class="cmd-title">Event Log (Son Kayıtlar)</div>
+              <div class="cmd-sub">System/Application</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--blue" data-cmd="task_list">
+              <div class="cmd-title">Scheduled Tasks Listele</div>
+              <div class="cmd-sub">Zamanlanmış görevler</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--blue" data-cmd="task_run">
+              <div class="cmd-title">Scheduled Task Çalıştır</div>
+              <div class="cmd-sub">TaskName ile</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--orange" data-cmd="restart">
+              <div class="cmd-title">Restart</div>
+              <div class="cmd-sub">Cihazı yeniden başlat</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--red" data-cmd="shutdown">
+              <div class="cmd-title">Shutdown</div>
+              <div class="cmd-sub">Cihazı kapat</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--green" data-cmd="w32time_resync">
+              <div class="cmd-title">W32Time Resync</div>
+              <div class="cmd-sub">Saat eşitle</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--green" data-cmd="w32time_restart">
+              <div class="cmd-title">W32Time Restart</div>
+              <div class="cmd-sub">Servisi restart et</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--green" data-cmd="w32time_status">
+              <div class="cmd-title">W32Time Status</div>
+              <div class="cmd-sub">Durum bilgisi</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--blue" data-cmd="time_get">
+              <div class="cmd-title">Saat/Tarih Oku</div>
+              <div class="cmd-sub">Mevcut zamanı göster</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--purple" data-cmd="time_set">
+              <div class="cmd-title">Saat/Tarih Ayarla</div>
+              <div class="cmd-sub">ISO tarih gönder</div>
+            </button>
+            {% if is_admin %}
+            <button type="button" class="btn cmd-btn cmd-btn--gray" data-cmd="cmd_exec">
+              <div class="cmd-title">CMD (Admin)</div>
+              <div class="cmd-sub">Komut çalıştır</div>
+            </button>
+            <button type="button" class="btn cmd-btn cmd-btn--gray" data-cmd="powershell_exec">
+              <div class="cmd-title">PowerShell (Admin)</div>
+              <div class="cmd-sub">Script çalıştır</div>
+            </button>
+
+            {% if device.ui_supports_exit_password %}
+            <button type="button" class="btn cmd-btn cmd-btn--red" id="btn-exit-password">
+              <div class="cmd-title">Çıkış Parolası Güncelle</div>
+              <div class="cmd-sub">Tray çıkışı için</div>
+            </button>
+            {% else %}
+            <button type="button" class="btn cmd-btn cmd-btn--red" id="btn-exit-password" disabled title="Agent >= 0.2.13 gerekli">
+              <div class="cmd-title">Çıkış Parolası Güncelle</div>
+              <div class="cmd-sub">agent>=0.2.13 gerekli</div>
+            </button>
+            {% endif %}
+            {% endif %}
+          </div>
+
+          <div class="mt-3">
+            <label class="form-label mb-2" for="cmd-payload">
+              <span id="cmd-detail-name" class="badge rounded-pill text-bg-primary px-3 py-2 fs-6 fw-semibold"></span>
+            </label>
+
+            <div class="row g-2 align-items-stretch">
+              <div class="col-12 col-lg-9">
+                <input id="cmd-payload" name="payload" class="form-control form-control-sm cmd-payload mono" value="{}" placeholder='{"iso":"2026-01-01T12:34:56"}' />
+              </div>
+              <div class="col-12 col-lg-3 d-grid">
+                <button class="btn btn-primary btn-sm w-100 h-100" type="submit">Gönder</button>
+              </div>
+            </div>
+
+            <div class="form-text mt-1">Gerekmezse <span class="mono">{}</span> bırak.</div>
+          </div>
+        </form>
+
+          {% if is_admin %}
+          <div class="d-flex flex-wrap gap-2 mt-3">
+            <a class="btn btn-outline-secondary btn-sm rounded-pill px-3" href="/devices/{{ device.id }}">Yenile</a>
+            <form method="post" action="/devices/{{ device.id }}/command" class="m-0">
+              <input type="hidden" name="type" value="agent_update" />
+              <input type="hidden" name="payload" value="{}" />
+              <button class="btn btn-outline-primary btn-sm rounded-pill px-3" type="submit" {% if not device.ui_supports_agent_update %}title="Agent eski olabilir; komut başarısız olabilir"{% endif %}>Agent Güncelle</button>
+            </form>
+            <form method="post" action="/devices/{{ device.id }}/token/rotate" class="m-0">
+              <button class="btn btn-outline-secondary btn-sm rounded-pill px-3" type="submit">Cihaz Token Yenile</button>
+            </form>
+            <form method="post" action="/devices/{{ device.id }}/delete" class="m-0" onsubmit="return confirm('Bu cihaz kaydı silinsin mi? (Komut geçmişi de silinir)');">
+              <button class="btn btn-outline-danger btn-sm rounded-pill px-3" type="submit">Cihazı Sil</button>
+            </form>
+          </div>
+          <div class="text-muted small mt-2">Token yenilenirse agent 401 alır ve yeniden kayıt olur.</div>
+          {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="tile-panel">
+          <div class="tile-panel-hdr tile-panel-hdr--purple d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+              <div class="title">Son Komut</div>
+              <div class="sub">Son gönderilen komut (queued/running dahil). Tamamlandıysa sonucu görünür.</div>
+            </div>
+          </div>
+          <div class="tile-panel-body">
+            {% if is_admin %}
+            <form id="exit-password-form" method="post" action="/devices/{{ device.id }}/exit_password" class="d-none">
+              <input type="hidden" name="password" id="exit-password-input" value="" />
+            </form>
+            {% endif %}
+            {% if not last_command %}
+              <div class="text-muted small mt-1">Henüz komut yok.</div>
+            {% else %}
+              {% set c = last_command %}
+              <div class="border rounded p-2 bg-white">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                  <span class="text-muted">#{{ c.id }}</span>
+                  <span class="badge text-bg-secondary">{{ c.ui_title or c.type }}</span>
+                  {% if c.status == 'success' %}
+                    <span class="badge text-bg-success">başarılı</span>
+                  {% elif c.status == 'failed' %}
+                    <span class="badge text-bg-danger">hata</span>
+                  {% elif c.status == 'running' %}
+                    <span class="badge text-bg-info">çalışıyor</span>
+                  {% else %}
+                    <span class="badge text-bg-warning">queued</span>
+                  {% endif %}
+                  {% if c.exit_code is not none %}<span class="badge text-bg-light">exit={{ c.exit_code }}</span>{% endif %}
+                </div>
+
+                {% if c.ui_request %}
+                  <div class="mt-2 small">
+                    <span class="text-muted">Komut:</span>
+                    <span class="mono">{{ c.ui_request }}</span>
+                  </div>
+                {% endif %}
+
+                {% if c.status in ['queued', 'running'] %}
+                  <div class="text-muted small mt-2">Komut henüz tamamlanmadı.</div>
+                {% endif %}
+
+                {% if c.ui_table_rows and c.ui_table_cols %}
+                  <div class="table-responsive mt-2">
+                    <table class="table table-sm table-striped align-middle mb-0">
+                      <thead>
+                        <tr>
+                          {% for col in c.ui_table_cols %}
+                            <th class="small">{{ col }}</th>
+                          {% endfor %}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for row in c.ui_table_rows[:8] %}
+                          <tr>
+                            {% for col in c.ui_table_cols %}
+                              {% set v = row.get(col) %}
+                              <td class="small">
+                                {% if col == 'Message' %}
+                                  {{ (v|string) | truncate(140, True) }}
+                                {% else %}
+                                  {{ v }}
+                                {% endif %}
+                              </td>
+                            {% endfor %}
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% elif c.ui_stdout_json is mapping %}
+                  <div class="table-responsive mt-2">
+                    <table class="table table-sm table-striped align-middle mb-0">
+                      <thead>
+                        <tr>
+                          <th class="small">Alan</th>
+                          <th class="small">Değer</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for k, v in c.ui_stdout_json.items() %}
+                          <tr>
+                            <td class="small mono">{{ k }}</td>
+                            <td class="small">{{ v }}</td>
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% endif %}
+
+                {% if c.stdout %}
+                  <div class="mt-2">
+                    <div class="small text-muted">Sonuç</div>
+                    <pre class="mt-1 mb-0 p-2 rounded bg-body-tertiary border small report-pre"><code class="mono">{{ c.stdout | truncate(2500, True) }}</code></pre>
+                  </div>
+                {% endif %}
+
+                {% if c.stderr %}
+                  <div class="mt-2">
+                    <div class="small text-danger">Hata</div>
+                    <pre class="mt-1 mb-0 p-2 rounded bg-body-tertiary border border-danger small report-pre"><code class="mono">{{ c.stderr | truncate(2500, True) }}</code></pre>
+                  </div>
+                {% endif %}
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="tile-panel">
+          <div class="tile-panel-hdr tile-panel-hdr--blue">
+            <div class="title">Envanter</div>
+            <div class="sub">Donanım ve sistem özetini görüntüle.</div>
+          </div>
+          <div class="tile-panel-body">
+        {% if not inventory %}
+          <div class="text-muted small mt-1">Henüz envanter yok.</div>
+        {% else %}
+          <div class="d-flex flex-wrap gap-2 mt-2">
+            <span class="badge text-bg-light">RAM: {{ (inventory.get('ram_total', 0) / 1024 / 1024 / 1024) | round(1) }} GB</span>
+            <span class="badge text-bg-light">CPU: {{ inventory.get('cpu_count', '-') }}</span>
+            <span class="badge text-bg-light">Disk: {{ (inventory.get('disks') or []) | length }}</span>
+          </div>
+          <div class="text-muted small mt-2">{{ inventory.get('platform','') }}</div>
+          <details class="mt-2">
+            <summary class="small text-muted report-summary">Ham envanter (komut #{{ inventory.get('_command_id') }})</summary>
+            <pre class="mt-2 mb-0 p-2 rounded bg-body-tertiary border small report-pre"><code class="mono">{{ inventory | tojson(indent=2) }}</code></pre>
+          </details>
+        {% endif %}
+
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="tile-panel">
+          <div class="tile-panel-hdr tile-panel-hdr--green d-flex align-items-center justify-content-between">
+            <div>
+              <div class="title">Son Komutlar</div>
+              <div class="sub">Bu cihaza gönderilen son komutların durumu.</div>
+            </div>
+          </div>
+          <div class="tile-panel-body">
+        {% if not recent_commands %}
+          <div class="text-muted small mt-1">Komut yok.</div>
+        {% else %}
+          <div class="d-grid gap-2 recent-commands mt-2">
+            {% for c in recent_commands %}
+              <div class="border rounded p-2 bg-white recent-command-card">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                  <span class="text-muted">#{{ c.id }}</span>
+                  <span class="badge text-bg-secondary">{{ c.ui_title or c.type }}</span>
+                  {% if c.ui_title and c.type and (c.ui_title != c.type) %}
+                    <span class="text-muted small">({{ c.type }})</span>
+                  {% endif %}
+                  {% if c.status == 'success' %}
+                    <span class="badge text-bg-success">başarılı</span>
+                  {% elif c.status == 'failed' %}
+                    <span class="badge text-bg-danger">hata</span>
+                  {% elif c.status == 'running' %}
+                    <span class="badge text-bg-primary">çalışıyor</span>
+                  {% else %}
+                    <span class="badge text-bg-warning">{{ c.status }}</span>
+                  {% endif %}
+                  {% if c.exit_code is not none %}<span class="badge text-bg-light">exit={{ c.exit_code }}</span>{% endif %}
+                  {% if c.ui_table_total %}<span class="badge text-bg-light">{{ c.ui_table_total }} kayıt</span>{% endif %}
+                </div>
+
+                {% if c.ui_summary %}
+                  <div class="mt-1 small text-muted">{{ c.ui_summary }}</div>
+                {% endif %}
+
+                {% if c.ui_table_rows and c.ui_table_cols %}
+                  <div class="table-responsive mt-2">
+                    <table class="table table-sm table-striped align-middle mb-0">
+                      <thead>
+                        <tr>
+                          {% for col in c.ui_table_cols %}
+                            <th class="small">{{ col }}</th>
+                          {% endfor %}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for row in c.ui_table_rows[:8] %}
+                          <tr>
+                            {% for col in c.ui_table_cols %}
+                              {% set v = row.get(col) %}
+                              <td class="small">
+                                {% if col == 'Message' %}
+                                  {{ (v|string) | truncate(140, True) }}
+                                {% else %}
+                                  {{ v }}
+                                {% endif %}
+                              </td>
+                            {% endfor %}
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  {% if c.ui_table_total and c.ui_table_total > 8 %}
+                    <div class="small text-muted mt-1">İlk 8 kayıt gösteriliyor. Ham çıktıdan tamamını görebilirsin.</div>
+                  {% endif %}
+                {% elif c.ui_stdout_json is mapping %}
+                  <div class="table-responsive mt-2">
+                    <table class="table table-sm table-striped align-middle mb-0">
+                      <thead>
+                        <tr>
+                          <th class="small">Alan</th>
+                          <th class="small">Değer</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for k, v in c.ui_stdout_json.items() %}
+                          <tr>
+                            <td class="small mono">{{ k }}</td>
+                            <td class="small">{{ v }}</td>
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% endif %}
+
+                {% if c.stdout %}
+                  <details class="mt-2">
+                    <summary class="small text-muted report-summary">Ham çıktı</summary>
+                    <pre class="mt-2 mb-0 p-2 rounded bg-body-tertiary border small report-pre"><code class="mono">{{ c.stdout }}</code></pre>
+                  </details>
+                {% endif %}
+
+                {% if c.stderr %}
+                  <details class="mt-2">
+                    <summary class="small text-danger report-summary">Hata (ham)</summary>
+                    <pre class="mt-2 mb-0 p-2 rounded bg-body-tertiary border border-danger small report-pre"><code class="mono">{{ c.stderr }}</code></pre>
+                  </details>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const payloadTemplates = {
+    inventory: "{}",
+    notify: '{"text":"Merhaba"}',
+    services_list: "{}",
+    service_control: '{"name":"w32time","action":"restart"}',
+    processes_list: '{"top":60}',
+    process_kill: '{"pid":1234}',
+    eventlog_recent: '{"log":"System","hours":24,"max":200}',
+    task_list: "{}",
+    task_run: '{"tn":"\\\\Microsoft\\\\Windows\\\\Defrag\\\\ScheduledDefrag"}',
+    restart: "{}",
+    shutdown: "{}",
+    w32time_resync: "{}",
+    w32time_restart: "{}",
+    w32time_status: "{}",
+    time_get: "{}",
+    time_set: '{"iso":"2026-01-01T12:34:56"}',
+    cmd_exec: '{"command":"ipconfig /all","timeout":60}',
+    powershell_exec: '{"script":"Get-Process | Select-Object -First 10 | ConvertTo-Json -Depth 3","timeout":60}'
+  };
+
+  const form = document.querySelector('form[action*="/command"]');
+  if (form) {
+    const typeInp = form.querySelector('input.cmd-type');
+    const payloadInp = form.querySelector('.cmd-payload');
+    const cmdButtons = Array.from(form.querySelectorAll('.cmd-btn[data-cmd]'));
+    const detailName = form.querySelector('#cmd-detail-name');
+
+    const setCmd = (cmd) => {
+      if (!typeInp || !payloadInp) return;
+      typeInp.value = cmd;
+      payloadInp.value = payloadTemplates[cmd] ?? "{}";
+      cmdButtons.forEach((b) => b.classList.toggle('is-active', b.dataset.cmd === cmd));
+
+      if (detailName) {
+        const btn = cmdButtons.find((b) => b.dataset.cmd === cmd);
+        const title = btn?.querySelector('.cmd-title')?.textContent?.trim();
+        detailName.textContent = title ?? '';
+      }
+    };
+
+    cmdButtons.forEach((b) => {
+      b.addEventListener('click', () => {
+        if (b.disabled) return;
+        setCmd(b.dataset.cmd);
+      });
+    });
+
+    const preselect = new URLSearchParams(window.location.search).get('cmd');
+    if (preselect && (preselect in payloadTemplates)) {
+      setCmd(preselect);
+    } else {
+      setCmd(typeInp?.value || 'inventory');
+    }
+
+    // After sending a command, auto-refresh once so the user sees updated state without manual reload.
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('sent') === '1') {
+      url.searchParams.delete('sent');
+      window.history.replaceState({}, '', url.toString());
+      window.setTimeout(() => window.location.reload(), 1500);
+    }
+  }
+
+  // Admin-only: update tray exit password without exposing it in the payload input.
+  const exitBtn = document.getElementById('btn-exit-password');
+  const exitForm = document.getElementById('exit-password-form');
+  const exitInp = document.getElementById('exit-password-input');
+  if (exitBtn && exitForm && exitInp) {
+    exitBtn.addEventListener('click', () => {
+      if (exitBtn.disabled) return;
+      const pw = window.prompt('Yeni çıkış parolası:');
+      if (!pw) return;
+      exitInp.value = pw;
+      exitForm.submit();
+    });
+  }
+</script>
+{% endblock %}

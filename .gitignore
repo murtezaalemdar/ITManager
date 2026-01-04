@@ -1,0 +1,57 @@
+# secrets
+reference.md
+.env
+.env.*
+
+# generic local/secret configs
+**/config.json
+!**/config.example.json
+!**/config.sample.json
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# editor/runtime junk
+.history/
+.vscode/
+.desen_ayarlari/
+logs/
+desktop.ini
+Thumbs.db
+.DS_Store
+
+# build artifacts
+build/
+dist/
+*.spec
+
+# binaries / archives
+*.exe
+*.msi
+*.zip
+*.7z
+*.rar
+*.tar
+*.tgz
+
+# data files
+*.db
+*.sqlite
+*.sqlite3
+
+# itmanager agent local config/state
+itmanager-agent/config.json
+itmanager-agent/**/state.json
+
+# itmanager server release store (large; regenerate from CI/deploy)
+itmanager-server/agent-releases/
+itmanager-agent/build/
+itmanager-agent/build-dist/
+itmanager-agent/build-work/
+
+# node
+node_modules/
+package-lock.json

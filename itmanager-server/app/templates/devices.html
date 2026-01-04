@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+
+{% block title %}ITManager | Cihazlar{% endblock %}
+
+{% block container_class %}container-fluid p-0{% endblock %}
+
+{% block head %}
+<style>
+  .dash-bg {
+    min-height: calc(100vh - 66px);
+    background:
+      radial-gradient(1200px circle at 15% 0%, rgba(var(--bs-primary-rgb), .42), transparent 55%),
+      radial-gradient(900px circle at 85% 10%, rgba(var(--bs-info-rgb), .35), transparent 50%),
+      radial-gradient(800px circle at 40% 100%, rgba(var(--bs-success-rgb), .25), transparent 50%),
+      linear-gradient(135deg, rgba(var(--bs-primary-rgb), .75), rgba(var(--bs-info-rgb), .55) 45%, rgba(var(--bs-success-rgb), .45));
+  }
+  .dash-navbar {
+    background: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, .18);
+  }
+  .dash-navbar .navbar-toggler {
+    border-color: rgba(255, 255, 255, .35);
+  }
+  .dash-navbar .navbar-toggler-icon {
+    filter: invert(1);
+  }
+  .dash-title {
+    text-shadow: 0 1px 0 rgba(0,0,0,.10);
+  }
+  .dash-subtitle {
+    color: rgba(255, 255, 255, .85);
+  }
+  .glass {
+    border-radius: 18px;
+    background: rgba(var(--bs-body-bg-rgb), .80);
+    border: 1px solid rgba(255, 255, 255, .28);
+    box-shadow: var(--bs-box-shadow-sm);
+    backdrop-filter: blur(10px);
+  }
+
+  .dash-tile {
+    border: 0;
+    border-radius: 18px;
+    color: #fff;
+    overflow: hidden;
+    box-shadow: var(--bs-box-shadow-sm);
+    transition: transform .12s ease, filter .12s ease;
+    text-decoration: none;
+    display: block;
+  }
+  .dash-tile:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.02);
+  }
+  .dash-tile-body {
+    padding: 18px;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .dash-tile-kicker {
+    opacity: .9;
+    font-size: .9rem;
+  }
+  .dash-tile-value {
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    font-size: 2rem;
+    line-height: 1.1;
+  }
+  .dash-tile-hint {
+    opacity: .85;
+    font-size: .9rem;
+  }
+  .dash-tile--devices {
+    background: linear-gradient(135deg, rgba(var(--bs-primary-rgb), .95), rgba(var(--bs-info-rgb), .78));
+  }
+  .dash-tile--online {
+    background: linear-gradient(135deg, rgba(var(--bs-success-rgb), .92), rgba(var(--bs-info-rgb), .70));
+  }
+  .dash-tile--offline {
+    background: linear-gradient(135deg, rgba(var(--bs-secondary-rgb), .92), rgba(var(--bs-primary-rgb), .55));
+  }
+  .dash-tile--pct {
+    background: linear-gradient(135deg, rgba(var(--bs-warning-rgb), .92), rgba(var(--bs-danger-rgb), .70));
+  }
+
+  .devices-table { min-width: 980px; }
+  .table-alloy thead th {
+    position: sticky;
+    top: 0;
+    background: rgba(var(--bs-body-bg-rgb), .92);
+    z-index: 1;
+  }
+  .table-alloy tbody tr { cursor: pointer; }
+  .status-dot {
+    width: .55rem;
+    height: .55rem;
+    border-radius: 999px;
+    display: inline-block;
+  }
+</style>
+{% endblock %}
+
+{% block navbar %}
+<nav class="navbar navbar-expand-lg dash-navbar">
+  <div class="container">
+    <a class="navbar-brand d-flex align-items-center gap-2 text-white" href="/dashboard">
+      <span class="brand-badge bg-white text-primary">IT</span>
+      <span class="fw-bold">ITManager</span>
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="nav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link text-white-50" href="/dashboard">Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link text-white-50 active" href="/devices">Cihazlar</a></li>
+      </ul>
+      <div class="d-flex align-items-center gap-3">
+        <div class="small text-white-50">Kullanıcı: <span class="text-white fw-semibold">{{ user }}</span></div>
+        <a class="btn btn-danger btn-sm" href="/logout">Çıkış</a>
+      </div>
+    </div>
+  </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="dash-bg">
+  <div class="container py-4">
+    <div class="text-center mb-4">
+      <h1 class="display-6 fw-bold text-white dash-title mb-1">Cihazlar</h1>
+      <div class="dash-subtitle">Son görülme bilgisi agent'ın sunucu ile iletişimi ile güncellenir (son {{ online_window_minutes }} dk: online).</div>
+    </div>
+
+    {% if err %}
+    <div class="alert alert-danger" role="alert">{{ err }}</div>
+    {% endif %}
+
+    {% if is_admin %}
+    <div class="glass mb-3">
+      <div class="p-3 p-md-4">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+          <div>
+            <div class="fw-semibold">Enrollment Token</div>
+            <div class="text-muted small">Agent'ların ilk kayıt (register) için kullandığı token.</div>
+          </div>
+          <form method="post" action="/admin/enrollment/rotate" class="m-0">
+            <button class="btn btn-outline-danger btn-sm" type="submit">Rotate</button>
+          </form>
+        </div>
+
+        <div class="d-flex align-items-center gap-2 mt-3 flex-wrap">
+          <code class="mono" id="enrollToken">{{ enrollment_token }}</code>
+          <button class="btn btn-primary btn-sm" type="button" onclick="copyEnrollToken()">Kopyala</button>
+          <span class="text-muted small" id="copyMsg"></span>
+        </div>
+
+        <div class="text-muted small mt-2">Rotate sonrası tüm agent config'leri yeni token ile güncellenmeli.</div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="row g-3 mb-4">
+      <div class="col-12 col-md-6 col-lg-3">
+        <a class="dash-tile dash-tile--devices" href="#devices-table">
+          <div class="dash-tile-body">
+            <div class="dash-tile-kicker">Toplam Cihaz</div>
+            <div class="dash-tile-value">{{ total_devices }}</div>
+            <div class="dash-tile-hint">Cihaz listesini görüntüle</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <a class="dash-tile dash-tile--online" href="#devices-table">
+          <div class="dash-tile-body">
+            <div class="dash-tile-kicker">Online</div>
+            <div class="dash-tile-value">{{ online_devices }}</div>
+            <div class="dash-tile-hint">Şu an aktif cihazlar</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <a class="dash-tile dash-tile--offline" href="#devices-table">
+          <div class="dash-tile-body">
+            <div class="dash-tile-kicker">Offline</div>
+            <div class="dash-tile-value">{{ offline_devices }}</div>
+            <div class="dash-tile-hint">Ulaşılamayan cihazlar</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <a class="dash-tile dash-tile--pct" href="#devices-table">
+          <div class="dash-tile-body">
+            <div class="dash-tile-kicker">Online Oranı</div>
+            <div class="dash-tile-value">{{ devices_online_pct }}%</div>
+            <div class="dash-tile-hint">Son {{ online_window_minutes }} dk</div>
+          </div>
+        </a>
+      </div>
+    </div>
+
+    <div id="devices-table" class="glass">
+      <div class="p-3 p-md-4">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle devices-table table-alloy mb-0">
+            <thead>
+              <tr>
+                <th style="width: 140px;">Durum</th>
+                <th>PC</th>
+                <th style="width: 160px;">IP</th>
+                <th style="width: 200px;">OS</th>
+                <th style="width: 220px;">Last Seen</th>
+                <th style="width: 120px;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for d in devices %}
+              {% set is_online = (d.last_seen_at and d.last_seen_at >= online_cutoff) %}
+              <tr class="{% if is_online %}table-success{% endif %}">
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="status-dot {% if is_online %}bg-success{% else %}bg-secondary{% endif %}"></span>
+                    <span class="badge {% if is_online %}text-bg-success{% else %}text-bg-secondary{% endif %}">
+                      {% if is_online %}online{% else %}offline{% endif %}
+                    </span>
+                  </div>
+                </td>
+                <td>
+                  <div class="mono">{{ d.hostname }}</div>
+                  <div class="text-muted small">Agent: <span class="mono">{{ d.agent_version or 'unknown' }}</span></div>
+                </td>
+                <td class="mono">{{ d.ip or '-' }}</td>
+                <td>{{ d.os or '-' }}</td>
+                <td class="small text-muted">{{ d.last_seen_at or '-' }}</td>
+                <td class="text-end">
+                  <a class="btn btn-primary btn-sm" href="/devices/{{ d.id }}{% if preselect_cmd %}?cmd={{ preselect_cmd }}{% endif %}">Aç</a>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="text-muted small mt-3">Varsayılan admin: admin / admin (hemen değiştir).</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function copyEnrollToken() {
+    const el = document.getElementById('enrollToken');
+    const msg = document.getElementById('copyMsg');
+    if (!el) return;
+    const t = (el.textContent || '').trim();
+    if (!t) return;
+    navigator.clipboard.writeText(t).then(() => {
+      if (msg) msg.textContent = 'Kopyalandı';
+      setTimeout(() => { if (msg) msg.textContent = ''; }, 1500);
+    }).catch(() => {
+      if (msg) msg.textContent = 'Kopyalanamadı';
+      setTimeout(() => { if (msg) msg.textContent = ''; }, 1500);
+    });
+  }
+
+  // Row click → open detail
+  for (const tr of document.querySelectorAll('table.table-alloy tbody tr')) {
+    const a = tr.querySelector('a[href]');
+    if (!a) continue;
+    tr.addEventListener('click', (e) => {
+      if (e.target && (e.target.closest('a,button,input,select,textarea,label'))) return;
+      window.location.href = a.getAttribute('href');
+    });
+  }
+</script>
+{% endblock %}
