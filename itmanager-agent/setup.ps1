@@ -21,8 +21,9 @@ if (-not (Test-IsAdmin)) {
     '-File', "`"$PSCommandPath`""
   ) + $MyInvocation.UnboundArguments
 
-  Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argList | Out-Null
-  exit 0
+  $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argList -Wait -PassThru
+  if ($null -ne $p -and $null -ne $p.ExitCode) { exit [int]$p.ExitCode }
+  exit 1
 }
 
 Set-Location -LiteralPath (Split-Path -Parent $PSCommandPath)
