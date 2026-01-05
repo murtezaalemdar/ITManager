@@ -34,6 +34,7 @@ class AgentConfig:
     auto_update: bool
     update_check_interval_seconds: int
     update_notify_user: bool
+    update_notify_timeout_seconds: int
 
 
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -67,6 +68,7 @@ def load_config(config_path: Path) -> AgentConfig:
     auto_update = bool(cfg.get("auto_update", True))
     update_check_interval_seconds = int(cfg.get("update_check_interval_seconds", 3600))
     update_notify_user = bool(cfg.get("update_notify_user", True))
+    update_notify_timeout_seconds = int(cfg.get("update_notify_timeout_seconds", 10))
 
     if not server_base_url:
         raise RuntimeError("server_base_url is required")
@@ -83,6 +85,7 @@ def load_config(config_path: Path) -> AgentConfig:
         auto_update=auto_update,
         update_check_interval_seconds=max(300, update_check_interval_seconds),
         update_notify_user=update_notify_user,
+        update_notify_timeout_seconds=max(5, min(600, update_notify_timeout_seconds)),
     )
 
 
@@ -189,8 +192,10 @@ class ITManagerAgent:
         # Best-effort: message currently logged-on users via msg.exe.
         # This can fail depending on session/policy; log only.
         try:
+            timeout = int(getattr(self.config, "update_notify_timeout_seconds", 10) or 10)
+            timeout = max(5, min(600, timeout))
             subprocess.Popen(
-                ["msg.exe", "*", "/TIME:10", text],
+                ["msg.exe", "*", f"/TIME:{timeout}", text],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

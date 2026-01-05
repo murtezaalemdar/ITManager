@@ -1060,7 +1060,12 @@ def _decorate_command_for_ui(c: Command) -> None:
             elif cmd_type == "powershell_exec":
                 c.ui_request = str(payload.get("script") or "").strip()
             elif cmd_type == "notify":
-                c.ui_request = str(payload.get("text") or "").strip()
+                msg = str(payload.get("text") or payload.get("message") or "").strip()
+                t = payload.get("timeout_seconds")
+                if msg and t is not None:
+                    c.ui_request = f"{msg} (süre={t}s)"
+                else:
+                    c.ui_request = msg
             elif cmd_type == "service_control":
                 name = str(payload.get("name") or "").strip()
                 action = str(payload.get("action") or "").strip()

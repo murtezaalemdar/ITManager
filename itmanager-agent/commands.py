@@ -448,16 +448,23 @@ $pretty
         if not merged:
             return 2, "", "missing payload.text (or payload.message)"
 
+        timeout_seconds = _clamp_int(
+            payload.get("timeout_seconds", payload.get("timeout")),
+            default=15,
+            min_v=5,
+            max_v=600,
+        )
+
         # Custom-titled message to the logged-on user(s).
         # Title requirement: "Bilgi İşlemden Mesaj" + local date/time.
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
         box_title = f"Bilgi İşlemden Mesaj - {now_str}"
-        code, out, err = _wts_send_message_to_sessions(box_title, merged, timeout=15)
+        code, out, err = _wts_send_message_to_sessions(box_title, merged, timeout=timeout_seconds)
         if code == 0:
             return code, out, err
 
         # Fallback: msg.exe (cannot control title bar; will show "Message from ...")
-        return _run(f"msg * /TIME:15 {merged}", timeout=15)
+        return _run(f"msg * /TIME:{timeout_seconds} {merged}", timeout=timeout_seconds + 5)
 
     if cmd_type in ("cmd_exec", "cmd"):
         command = _payload_str(payload, "command").strip()

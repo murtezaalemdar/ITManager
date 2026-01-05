@@ -377,13 +377,17 @@
                 <div id="cmd-fields" class="vstack gap-2">
                   <div class="cmd-field d-none" data-for="notify">
                     <div class="row g-2">
-                      <div class="col-12 col-md-4">
+                      <div class="col-12 col-md-3">
                         <label class="form-label form-label-sm" for="f-notify-title">Başlık (opsiyonel)</label>
                         <input id="f-notify-title" class="form-control form-control-sm" type="text" placeholder="Örn: Bilgi" />
                       </div>
-                      <div class="col-12 col-md-8">
+                      <div class="col-12 col-md-7">
                         <label class="form-label form-label-sm" for="f-notify-message">Mesaj</label>
                         <input id="f-notify-message" class="form-control form-control-sm" type="text" placeholder="Örn: 5 dk sonra restart yapılacak." />
+                      </div>
+                      <div class="col-12 col-md-2">
+                        <label class="form-label form-label-sm" for="f-notify-timeout">Süre (sn)</label>
+                        <input id="f-notify-timeout" class="form-control form-control-sm" type="number" min="5" max="600" step="1" value="15" />
                       </div>
                     </div>
                   </div>
@@ -915,10 +919,12 @@
       if (cmd === 'notify') {
         const title = getVal('f-notify-title');
         const message = getVal('f-notify-message');
+        const timeout_seconds = getInt('f-notify-timeout');
         if (!title && !message) throw new Error('Mesaj boş olamaz.');
         const out = {};
         if (title) out.title = title;
         if (message) out.message = message;
+        if (timeout_seconds) out.timeout_seconds = timeout_seconds;
         return out;
       }
 
