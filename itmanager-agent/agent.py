@@ -446,6 +446,11 @@ try {
     Copy-WithRetry $stageTray $targetTray 12
     Copy-WithRetry $stageAgent $targetAgent 12
 
+    # Remove Mark-of-the-Web if present (prevents security prompts on logon/startup).
+    try { Unblock-File -Path $exe -ErrorAction SilentlyContinue } catch { }
+    try { Unblock-File -Path $targetTray -ErrorAction SilentlyContinue } catch { }
+    try { Unblock-File -Path $targetAgent -ErrorAction SilentlyContinue } catch { }
+
     Log "ensure service installed"
     $q2 = & sc.exe query $svcName 2>&1
     if ($LASTEXITCODE -ne 0) {

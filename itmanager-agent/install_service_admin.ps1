@@ -38,6 +38,9 @@ New-Item -ItemType Directory -Force -Path $pd | Out-Null
 $exe = Join-Path $pd 'ITManagerAgentService.exe'
 Copy-Item -Force $srcExe $exe
 
+# Remove Mark-of-the-Web if present
+try { Unblock-File -Path $exe -ErrorAction SilentlyContinue } catch { }
+
 if ($Reinstall) {
   try { sc.exe stop ITManagerAgent | Out-Null } catch { }
   Start-Sleep -Seconds 2
