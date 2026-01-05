@@ -1,5 +1,18 @@
 # ITManager Agent (Windows)
 
+## Tek tık kurulum / update (önerilen)
+
+1) Sunucudan agent ZIP'ini indirip bir klasöre çıkar.
+2) `Setup.cmd` çalıştır (UAC ile admin isteyebilir).
+
+Bu işlem:
+- EXE + `config.json` dosyalarını `C:/ProgramData/ITManagerAgent` altına kopyalar
+- Mark-of-the-Web varsa `Unblock` uygular (UNC/Internet kaynaklı güvenlik uyarılarını azaltır)
+- Servisi kurar (ve başlatır)
+- Tray'i Windows Startup'a ekler (kullanıcı login olunca ikon çıkar)
+
+Not: İlk kurulumda `config.json` yoksa `config.example.json` -> `config.json` kopyalanır; içini kendi ortamına göre düzenlemelisin.
+
 ## Kurulum (Service)
 
 PowerShell'i **Run as administrator** açıp agent klasöründe çalıştır:

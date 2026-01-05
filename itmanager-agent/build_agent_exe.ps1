@@ -160,6 +160,12 @@ if (Test-Path .\install_service_admin.ps1) {
 if (Test-Path .\install_tray_startup.ps1) {
   Copy-Item -Force .\install_tray_startup.ps1 (Join-Path $OutputDir "install_tray_startup.ps1")
 }
+if (Test-Path .\setup.ps1) {
+  Copy-Item -Force .\setup.ps1 (Join-Path $OutputDir "setup.ps1")
+}
+if (Test-Path .\Setup.cmd) {
+  Copy-Item -Force .\Setup.cmd (Join-Path $OutputDir "Setup.cmd")
+}
 
 Write-Host "[OK] Çıktı: $(Resolve-Path $OutputDir)"
 Write-Host "     - $OutputDir\\$Name.exe"
@@ -167,6 +173,8 @@ Write-Host "     - $OutputDir\\$TrayName.exe"
 Write-Host "     - $OutputDir\\$AgentName.exe"
 Write-Host "     - $OutputDir\\install_service_admin.ps1"
 Write-Host "     - $OutputDir\\install_tray_startup.ps1"
+Write-Host "     - $OutputDir\\setup.ps1"
+Write-Host "     - $OutputDir\\Setup.cmd"
 Write-Host "     - $OutputDir\\config.example.json"
 if (Test-Path .\config.json) { Write-Host "     - $OutputDir\\config.json" }
 Write-Host "\nKurulum (hedef PC - Admin PowerShell):"
@@ -204,6 +212,8 @@ if ($version -and $version -ne "unknown") {
   if (Test-Path (Join-Path $OutputDir "config.json")) { $zipItems += (Join-Path $OutputDir "config.json") }
   if (Test-Path (Join-Path $OutputDir "install_service_admin.ps1")) { $zipItems += (Join-Path $OutputDir "install_service_admin.ps1") }
   if (Test-Path (Join-Path $OutputDir "install_tray_startup.ps1")) { $zipItems += (Join-Path $OutputDir "install_tray_startup.ps1") }
+  if (Test-Path (Join-Path $OutputDir "setup.ps1")) { $zipItems += (Join-Path $OutputDir "setup.ps1") }
+  if (Test-Path (Join-Path $OutputDir "Setup.cmd")) { $zipItems += (Join-Path $OutputDir "Setup.cmd") }
   Compress-Archive -Path $zipItems -DestinationPath $zipPath -Force
   $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
   Set-Content -Path ("$zipPath.sha256") -Value $hash -Encoding ascii
