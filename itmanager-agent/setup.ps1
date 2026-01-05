@@ -27,6 +27,16 @@ if (-not (Test-IsAdmin)) {
 
 Set-Location -LiteralPath (Split-Path -Parent $PSCommandPath)
 
+# Stop running instances (prevents locked binaries during update)
+$svcName = 'ITManagerAgent'
+try { Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue } catch { }
+Start-Sleep -Seconds 1
+foreach ($p in @('ITManagerAgentService', 'ITManagerAgentTray', 'ITManagerAgent')) {
+  try { Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue } catch { }
+  try { & taskkill.exe /F /T /IM ($p + '.exe') 2>$null | Out-Null } catch { }
+}
+Start-Sleep -Seconds 1
+
 $pd = Join-Path $env:ProgramData 'ITManagerAgent'
 New-Item -ItemType Directory -Force -Path $pd | Out-Null
 
