@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy import text
 from sqlalchemy.orm import selectinload
 
-from .auth import ensure_default_admin, generate_device_token, get_sso_user, verify_password
+from .auth import ensure_default_admin, generate_device_token, get_sso_user, hash_password, verify_password
 from .db import Base, SessionLocal, engine
 from .models import Command, Device, Group, ServerConfig, User, device_groups
 from .settings import settings
@@ -335,6 +335,13 @@ def root(request: Request):
 def dashboard(request: Request, db=Depends(db_session)):
     user = require_panel_user(request)
 
+    is_admin = False
+    try:
+        u = db.scalar(select(User).where(User.username == user))
+        is_admin = bool(u and u.is_admin)
+    except Exception:
+        is_admin = False
+
     def _pct(part: int, whole: int) -> int:
         if whole <= 0:
             return 0
@@ -374,6 +381,7 @@ def dashboard(request: Request, db=Depends(db_session)):
         {
             "request": request,
             "user": user,
+            "is_admin": is_admin,
             "total_devices": total_devices,
             "online_devices": online_devices,
             "offline_devices": offline_devices,
@@ -436,6 +444,7 @@ def devices(request: Request, db=Depends(db_session)):
     ok = request.query_params.get("ok")
     preselect_cmd = request.query_params.get("cmd")
     group_id_param = (request.query_params.get("group_id") or "").strip()
+    status_filter = (request.query_params.get("status") or "").strip().lower()
     selected_group_id: int | None = None
     if group_id_param.isdigit():
         selected_group_id = int(group_id_param)
@@ -460,12 +469,20 @@ def devices(request: Request, db=Depends(db_session)):
     q = select(Device).options(selectinload(Device.groups)).order_by(Device.hostname)
     if selected_group_id is not None:
         q = q.where(Device.groups.any(Group.id == selected_group_id))
-    rows = db.scalars(q).all()
+    rows_all = db.scalars(q).all()
 
-    total_devices = len(rows)
-    online_devices = sum(1 for d in rows if d.last_seen_at and d.last_seen_at >= online_cutoff)
+    total_devices = len(rows_all)
+    online_devices = sum(1 for d in rows_all if d.last_seen_at and d.last_seen_at >= online_cutoff)
     offline_devices = total_devices - online_devices
     devices_online_pct = int(round((online_devices * 100.0) / total_devices)) if total_devices > 0 else 0
+
+    rows = rows_all
+    if status_filter == "online":
+        rows = [d for d in rows_all if d.last_seen_at and d.last_seen_at >= online_cutoff]
+    elif status_filter == "offline":
+        rows = [d for d in rows_all if not d.last_seen_at or d.last_seen_at < online_cutoff]
+    else:
+        status_filter = ""
 
     # UI hints (capability detection by agent version)
     for d in rows:
@@ -497,6 +514,7 @@ def devices(request: Request, db=Depends(db_session)):
             "groups": groups,
             "selected_group_id": selected_group_id,
             "selected_group": selected_group,
+            "status_filter": status_filter,
             "devices": rows,
             "online_cutoff": online_cutoff,
             "online_window_minutes": online_window_minutes,
@@ -1564,6 +1582,109 @@ def rotate_enrollment_token(request: Request, db=Depends(db_session)):
     cfg.updated_at = datetime.utcnow()
     db.commit()
     return RedirectResponse("/devices", status_code=302)
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_users(request: Request, db=Depends(db_session)):
+    user = require_admin_user(request, db)
+    err = request.query_params.get("err")
+    ok = request.query_params.get("ok")
+
+    users = db.scalars(select(User).order_by(User.username)).all()
+
+    resp = templates.TemplateResponse(
+        "admin_users.html",
+        {
+            "request": request,
+            "user": user,
+            "is_admin": True,
+            "users": users,
+            "err": err,
+            "ok": ok,
+        },
+    )
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+@app.post("/admin/users/create")
+def admin_create_user(
+    request: Request,
+    username: str = Form(""),
+    password: str = Form(""),
+    is_admin: str | None = Form(None),
+    db=Depends(db_session),
+):
+    require_admin_user(request, db)
+
+    u = (username or "").strip()
+    if not u:
+        msg = "Kullanıcı adı boş olamaz"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+    if len(u) > 64:
+        msg = "Kullanıcı adı çok uzun"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+    if any(ch.isspace() for ch in u):
+        msg = "Kullanıcı adında boşluk olamaz"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+
+    existing = db.scalar(select(User).where(User.username == u))
+    if existing:
+        msg = "Bu kullanıcı zaten var"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+
+    pw = (password or "").strip()
+    if len(pw) < 8:
+        msg = "Parola en az 8 karakter olmalı"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+    if len(pw) > 256:
+        msg = "Parola çok uzun"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+
+    admin_flag = bool(is_admin)
+    new_user = User(username=u, password_hash=hash_password(pw), is_admin=admin_flag)
+    db.add(new_user)
+    db.commit()
+
+    msg = "Kullanıcı oluşturuldu"
+    return RedirectResponse(f"/admin/users?ok={quote(msg)}", status_code=302)
+
+
+@app.post("/admin/password")
+def admin_change_own_password(
+    request: Request,
+    current_password: str = Form(""),
+    new_password: str = Form(""),
+    db=Depends(db_session),
+):
+    username = require_admin_user(request, db)
+    user = db.scalar(select(User).where(User.username == username))
+    if not user:
+        raise HTTPException(status_code=403)
+
+    cp = (current_password or "").strip()
+    if not cp:
+        msg = "Mevcut parola boş olamaz"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+    if not verify_password(cp, user.password_hash):
+        msg = "Mevcut parola hatalı"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+
+    np = (new_password or "").strip()
+    if len(np) < 8:
+        msg = "Yeni parola en az 8 karakter olmalı"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+    if len(np) > 256:
+        msg = "Yeni parola çok uzun"
+        return RedirectResponse(f"/admin/users?err={quote(msg)}", status_code=302)
+
+    user.password_hash = hash_password(np)
+    db.commit()
+
+    msg = "Parola güncellendi"
+    return RedirectResponse(f"/admin/users?ok={quote(msg)}", status_code=302)
 
 
 # -------- Agent API --------

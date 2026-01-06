@@ -3,6 +3,9 @@ reference.md
 .env
 .env.*
 
+# local credentialed settings
+settings.json
+
 # generic local/secret configs
 **/config.json
 !**/config.example.json

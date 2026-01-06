@@ -15,7 +15,7 @@
       linear-gradient(135deg, rgba(var(--bs-primary-rgb), .75), rgba(var(--bs-info-rgb), .55) 45%, rgba(var(--bs-success-rgb), .45));
   }
   .dash-navbar {
-    background: transparent;
+    background: linear-gradient(135deg, rgba(var(--bs-primary-rgb), .92), rgba(var(--bs-info-rgb), .70) 55%, rgba(var(--bs-success-rgb), .55));
     border-bottom: 1px solid rgba(255, 255, 255, .18);
   }
   .dash-navbar .navbar-toggler {
@@ -117,6 +117,9 @@
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
         <li class="nav-item"><a class="nav-link text-white-50" href="/dashboard">Dashboard</a></li>
         <li class="nav-item"><a class="nav-link text-white-50 active" href="/devices">Cihazlar</a></li>
+        {% if is_admin %}
+        <li class="nav-item"><a class="nav-link text-white-50" href="/admin/users">Yönetim</a></li>
+        {% endif %}
       </ul>
       <div class="d-flex align-items-center gap-3">
         <div class="small text-white-50">Kullanıcı: <span class="text-white fw-semibold">{{ user }}</span></div>
@@ -175,6 +178,9 @@
           <div class="col-12 col-lg-6">
             <form method="get" action="/devices" class="m-0">
               <label class="form-label fw-semibold" for="group_id">Grup</label>
+              {% if status_filter %}
+                <input type="hidden" name="status" value="{{ status_filter }}" />
+              {% endif %}
               <div class="d-flex align-items-center gap-2 flex-wrap">
                 <select class="form-select form-select-sm" id="group_id" name="group_id" style="max-width: 340px;">
                   <option value="" {% if not selected_group_id %}selected{% endif %}>Tümü</option>
@@ -193,7 +199,6 @@
           {% if is_admin %}
           <div class="col-12 col-lg-6">
             <form method="post" action="/groups/create" class="m-0">
-              <label class="form-label fw-semibold" for="group_name">Yeni Grup</label>
               <div class="d-flex align-items-center gap-2 flex-wrap">
                 <input class="form-control form-control-sm" id="group_name" name="name" placeholder="Örn: Muhasebe" style="max-width: 340px;" />
                 <button class="btn btn-primary btn-sm" type="submit">Oluştur</button>
@@ -202,7 +207,6 @@
           </div>
           {% endif %}
         </div>
-
         {% if selected_group_id %}
         <div class="mt-3">
           <div class="text-muted small mb-2">Seçili gruba komut gönder:</div>
@@ -211,7 +215,6 @@
           <div class="mb-2">
             <form method="post" action="/groups/{{ selected_group_id }}/rename" class="m-0">
               <div class="d-flex align-items-center gap-2 flex-wrap">
-                <div class="small text-muted" style="min-width: 110px;">Grup adı:</div>
                 <input class="form-control form-control-sm" name="name" value="{{ selected_group.name if selected_group else '' }}" placeholder="Grup adı" style="max-width: 340px;" />
                 <button class="btn btn-outline-secondary btn-sm" type="submit">Kaydet</button>
               </div>
@@ -220,7 +223,6 @@
           {% else %}
           <div class="text-muted small mb-2">Grup adı değiştirme için admin yetkisi gerekir.</div>
           {% endif %}
-
           <form id="group-command-form" method="post" action="/groups/{{ selected_group_id }}/command" class="m-0">
             <input type="hidden" id="group-payload" name="payload" value="{}" />
 
@@ -410,7 +412,7 @@
 
     <div class="row g-3 mb-4">
       <div class="col-12 col-md-6 col-lg-3">
-        <a class="dash-tile dash-tile--devices" href="#devices-table">
+        <a class="dash-tile dash-tile--devices" href="{% if selected_group_id %}/devices?group_id={{ selected_group_id }}#devices-table{% else %}/devices#devices-table{% endif %}">
           <div class="dash-tile-body">
             <div class="dash-tile-kicker">Toplam Cihaz</div>
             <div class="dash-tile-value">{{ total_devices }}</div>
@@ -419,7 +421,7 @@
         </a>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
-        <a class="dash-tile dash-tile--online" href="#devices-table">
+        <a class="dash-tile dash-tile--online" href="{% if selected_group_id %}/devices?group_id={{ selected_group_id }}&status=online#devices-table{% else %}/devices?status=online#devices-table{% endif %}">
           <div class="dash-tile-body">
             <div class="dash-tile-kicker">Online</div>
             <div class="dash-tile-value">{{ online_devices }}</div>
@@ -428,7 +430,7 @@
         </a>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
-        <a class="dash-tile dash-tile--offline" href="#devices-table">
+        <a class="dash-tile dash-tile--offline" href="{% if selected_group_id %}/devices?group_id={{ selected_group_id }}&status=offline#devices-table{% else %}/devices?status=offline#devices-table{% endif %}">
           <div class="dash-tile-body">
             <div class="dash-tile-kicker">Offline</div>
             <div class="dash-tile-value">{{ offline_devices }}</div>
@@ -437,7 +439,7 @@
         </a>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
-        <a class="dash-tile dash-tile--pct" href="#devices-table">
+        <a class="dash-tile dash-tile--pct" href="{% if selected_group_id %}/devices?group_id={{ selected_group_id }}&status=online#devices-table{% else %}/devices?status=online#devices-table{% endif %}">
           <div class="dash-tile-body">
             <div class="dash-tile-kicker">Online Oranı</div>
             <div class="dash-tile-value">{{ devices_online_pct }}%</div>

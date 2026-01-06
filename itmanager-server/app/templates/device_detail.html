@@ -15,7 +15,7 @@
       linear-gradient(135deg, rgba(var(--bs-primary-rgb), .75), rgba(var(--bs-info-rgb), .55) 45%, rgba(var(--bs-success-rgb), .45));
   }
   .dash-navbar {
-    background: transparent;
+    background: linear-gradient(135deg, rgba(var(--bs-primary-rgb), .92), rgba(var(--bs-info-rgb), .70) 55%, rgba(var(--bs-success-rgb), .55));
     border-bottom: 1px solid rgba(255, 255, 255, .18);
   }
   .dash-navbar .navbar-toggler {
@@ -196,7 +196,11 @@
     </button>
     <div class="collapse navbar-collapse" id="nav">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link text-white-50" href="/dashboard">Dashboard</a></li>
         <li class="nav-item"><a class="nav-link text-white-50 active" href="/devices">Cihazlar</a></li>
+        {% if is_admin %}
+        <li class="nav-item"><a class="nav-link text-white-50" href="/admin/users">Yönetim</a></li>
+        {% endif %}
       </ul>
       <div class="d-flex align-items-center gap-3">
         <div class="small text-white-50">Kullanıcı: <span class="text-white fw-semibold">{{ user }}</span></div>

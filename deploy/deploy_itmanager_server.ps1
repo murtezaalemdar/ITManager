@@ -25,8 +25,10 @@ $localServerDir = Join-Path $repoRoot 'itmanager-server'
 $files = @(
   @{ Local = (Join-Path $localServerDir 'app\models.py'); Remote = "$RemoteRoot/app/models.py" },
   @{ Local = (Join-Path $localServerDir 'app\main.py'); Remote = "$RemoteRoot/app/main.py" },
+  @{ Local = (Join-Path $localServerDir 'app\templates\dashboard.html'); Remote = "$RemoteRoot/app/templates/dashboard.html" },
   @{ Local = (Join-Path $localServerDir 'app\templates\devices.html'); Remote = "$RemoteRoot/app/templates/devices.html" },
-  @{ Local = (Join-Path $localServerDir 'app\templates\device_detail.html'); Remote = "$RemoteRoot/app/templates/device_detail.html" }
+  @{ Local = (Join-Path $localServerDir 'app\templates\device_detail.html'); Remote = "$RemoteRoot/app/templates/device_detail.html" },
+  @{ Local = (Join-Path $localServerDir 'app\templates\admin_users.html'); Remote = "$RemoteRoot/app/templates/admin_users.html" }
 )
 
 foreach ($f in $files) {
