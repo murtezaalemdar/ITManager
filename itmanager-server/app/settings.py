@@ -25,8 +25,15 @@ class Settings(BaseSettings):
 
     sso_header_name: str = "X-Remote-User"
 
+    # RustDesk self-host support (agent-side deploy/config).
+    # - rustdesk_config_string: Exported/clipboard config string from RustDesk (Settings -> Network -> Export Server Config)
+    # - rustdesk_password: Optional permanent password to set after deploy (kept out of DB; returned to agent only)
+    rustdesk_config_string: str = ""
+    rustdesk_password: str = ""
+
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()

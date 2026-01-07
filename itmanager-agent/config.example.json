@@ -3,7 +3,7 @@
     "enrollment_token":  "KARAKOC_ENROLL_CHANGE_ME",
     "verify_tls":  false,
     "poll_seconds":  10,
-    "agent_version":  "0.2.37",
+    "agent_version":  "0.2.48",
     "state_dir":  "C:/ProgramData/ITManagerAgent",
     "auto_update":  true,
     "update_check_interval_seconds":  3600,

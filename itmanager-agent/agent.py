@@ -118,6 +118,18 @@ def _platform_name() -> str:
     return "unknown"
 
 
+def _tail_text_file(path: Path, max_chars: int = 4000) -> str:
+    try:
+        if not path.exists():
+            return ""
+        data = path.read_text(encoding="utf-8", errors="ignore")
+        if len(data) <= max_chars:
+            return data
+        return data[-max_chars:]
+    except Exception:
+        return ""
+
+
 def get_hostname() -> str:
     try:
         return socket.gethostname()
@@ -292,6 +304,198 @@ class ITManagerAgent:
                 raise RuntimeError(f"sha256 mismatch expected={expected} actual={actual}")
 
         return zip_path
+
+    def _download_tool_file(self, url: str, out_path: Path, expected_sha256: str = "") -> Path:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log.info("tool_download -> %s", url)
+        r = self.session.get(url, headers=self.auth_headers, timeout=180, verify=self.config.verify_tls, stream=True)
+        r.raise_for_status()
+        with out_path.open("wb") as f:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+        exp = (expected_sha256 or "").strip().upper()
+        if exp:
+            actual = _sha256_file(out_path)
+            if actual != exp:
+                raise RuntimeError(f"sha256 mismatch expected={exp} actual={actual}")
+        return out_path
+
+    def _rustdesk_deploy(self) -> tuple[int, str, str]:
+        if not self._token:
+            return 2, "", "not enrolled"
+
+        try:
+            info_url = f"{self.config.server_base_url}/api/agent/tools/rustdesk/latest"
+            r = self.session.get(info_url, headers=self.auth_headers, timeout=30, verify=self.config.verify_tls)
+            if r.status_code == 404:
+                return 2, "", "rustdesk tool not found on server"
+            r.raise_for_status()
+            info = r.json() if r.text else None
+            if not isinstance(info, dict):
+                return 2, "", "invalid tool info"
+
+            filename = str(info.get("filename") or "").strip()
+            sha = str(info.get("sha256") or "").strip().upper()
+            dl = str(info.get("download_url") or "").strip()
+            cfg = str(info.get("config_string") or "").strip()
+            pw = str(info.get("password") or "").strip()
+            if not filename or not dl:
+                return 2, "", "invalid tool info (filename/download_url missing)"
+            if not cfg:
+                return 2, "", "rustdesk self-host config not set on server"
+
+            if dl.startswith("http://") or dl.startswith("https://"):
+                dl_url = dl
+            else:
+                dl_url = f"{self.config.server_base_url}{dl}"
+
+            tools_dir = self.config.state_dir / "tools" / "rustdesk"
+            download_path = tools_dir / filename
+            self._download_tool_file(dl_url, download_path, expected_sha256=sha)
+
+            # Deploy/install best-effort.
+            ext = download_path.suffix.lower()
+
+            # Common install location (keeps files stable across updates)
+            pd = Path(os.environ.get("ProgramData") or r"C:\ProgramData")
+            install_root = pd / "ITManager" / "tools" / "rustdesk"
+            install_root.mkdir(parents=True, exist_ok=True)
+
+            def _run_no_window(args: list[str], timeout: int = 600) -> subprocess.CompletedProcess:
+                kwargs = {
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                    "timeout": timeout,
+                    "shell": False,
+                }
+                if os.name == "nt":
+                    kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                return subprocess.run(args, **kwargs)
+
+            def _find_rustdesk_exe() -> Optional[Path]:
+                if os.name != "nt":
+                    return None
+                pf = Path(os.environ.get("ProgramFiles") or r"C:\Program Files")
+                pf86 = Path(os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)")
+                candidates = [
+                    pf / "RustDesk" / "rustdesk.exe",
+                    pf / "RustDesk" / "RustDesk.exe",
+                    pf86 / "RustDesk" / "rustdesk.exe",
+                    pf86 / "RustDesk" / "RustDesk.exe",
+                ]
+                for p in candidates:
+                    try:
+                        if p.exists() and p.is_file():
+                            return p
+                    except Exception:
+                        continue
+                return None
+
+            def _apply_rustdesk_config(rustdesk_exe: Path) -> tuple[Optional[str], str]:
+                # Apply config string and optionally set permanent password.
+                # IMPORTANT: do not return the password to avoid storing plaintext in server DB.
+                err_msgs: list[str] = []
+                try:
+                    cp = _run_no_window([str(rustdesk_exe), "--config", cfg], timeout=60)
+                    if cp.returncode != 0:
+                        err_msgs.append((cp.stderr or cp.stdout or "").strip() or "rustdesk --config failed")
+                except Exception as e:
+                    err_msgs.append(f"rustdesk --config exception: {e}")
+
+                if pw:
+                    try:
+                        cp = _run_no_window([str(rustdesk_exe), "--password", pw], timeout=30)
+                        if cp.returncode != 0:
+                            err_msgs.append((cp.stderr or cp.stdout or "").strip() or "rustdesk --password failed")
+                    except Exception as e:
+                        err_msgs.append(f"rustdesk --password exception: {e}")
+
+                rustdesk_id: Optional[str] = None
+                try:
+                    cp = _run_no_window([str(rustdesk_exe), "--get-id"], timeout=30)
+                    if cp.returncode == 0:
+                        cand = (cp.stdout or "").strip()
+                        if cand:
+                            # Sometimes prints extra lines; keep last non-empty line.
+                            lines = [ln.strip() for ln in cand.splitlines() if ln.strip()]
+                            if lines:
+                                rustdesk_id = lines[-1]
+                except Exception as e:
+                    err_msgs.append(f"rustdesk --get-id exception: {e}")
+
+                return rustdesk_id, "\n".join([m for m in err_msgs if m])
+
+            if ext == ".msi":
+                # Silent MSI install.
+                cp = _run_no_window(["msiexec.exe", "/i", str(download_path), "/qn", "/norestart"], timeout=900)
+                out = (cp.stdout or "").strip()
+                err = (cp.stderr or "").strip()
+                if cp.returncode != 0:
+                    return int(cp.returncode), out, (err or "msiexec failed")
+                rustdesk_exe = _find_rustdesk_exe()
+                if rustdesk_exe:
+                    rid, cfg_err = _apply_rustdesk_config(rustdesk_exe)
+                    msg = f"rustdesk msi installed ({filename}); config applied"
+                    if rid:
+                        msg += f"; id={rid}"
+                    if pw:
+                        msg += "; password set"
+                    return 0, msg, cfg_err
+                return 0, f"rustdesk msi installed ({filename}); rustdesk.exe not found to apply config", ""
+
+            if ext == ".zip":
+                # Extract to ProgramData tool dir.
+                target_dir = install_root / download_path.stem
+                if target_dir.exists():
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                target_dir.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(download_path, "r") as z:
+                    z.extractall(target_dir)
+                return 0, f"rustdesk zip extracted to {target_dir}", ""
+
+            if ext == ".exe":
+                # Copy exe into stable location.
+                target_exe = install_root / filename
+                try:
+                    shutil.copy2(download_path, target_exe)
+                except Exception:
+                    target_exe = download_path
+
+                # Best-effort silent install (many installers accept /S). If it fails, still consider deploy ok.
+                try:
+                    cp = _run_no_window([str(target_exe), "/S"], timeout=900)
+                    if cp.returncode == 0:
+                        rustdesk_exe = _find_rustdesk_exe() or target_exe
+                        if rustdesk_exe and rustdesk_exe.exists():
+                            rid, cfg_err = _apply_rustdesk_config(rustdesk_exe)
+                            msg = f"rustdesk exe installed (silent) ({filename}); config applied"
+                            if rid:
+                                msg += f"; id={rid}"
+                            if pw:
+                                msg += "; password set"
+                            return 0, msg, cfg_err
+                        return 0, f"rustdesk exe installed (silent) ({filename}); rustdesk.exe not found to apply config", ""
+                except Exception:
+                    pass
+
+                # If install didn't run, at least apply config to the deployed binary if it supports it.
+                try:
+                    rid, cfg_err = _apply_rustdesk_config(target_exe)
+                    msg = f"rustdesk exe deployed to {target_exe}; config applied"
+                    if rid:
+                        msg += f"; id={rid}"
+                    if pw:
+                        msg += "; password set"
+                    return 0, msg, cfg_err
+                except Exception:
+                    return 0, f"rustdesk exe deployed to {target_exe}", ""
+
+            return 2, "", f"unsupported rustdesk tool file extension: {ext or '-'}"
+        except Exception:
+            return 1, "", traceback.format_exc()[-2000:]
 
     def _extract_release(self, zip_path: Path, info: Dict[str, Any]) -> Path:
         plat = str(info.get("platform") or _platform_name())
@@ -542,16 +746,24 @@ try {
         script_path.write_text(script, encoding="utf-8")
         return script_path
 
-    def apply_update_if_needed(self, info: Dict[str, Any], force: bool = False) -> None:
+    def apply_update_if_needed(
+        self,
+        info: Dict[str, Any],
+        force: bool = False,
+        *,
+        raise_on_error: bool = False,
+        wait_for_log_seconds: int = 0,
+    ) -> Tuple[bool, str, str]:
         if os.name != "nt":
-            return
+            return False, "", "unsupported-os"
         if not force and not self.config.auto_update:
-            return
+            return False, "", "auto-update-disabled"
 
         ver = str(info.get("version") or "").strip()
         if not ver:
-            return
+            return False, "", "release-version-missing"
 
+        script_path: Optional[Path] = None
         try:
             self._write_health({"update_in_progress": True, "update_target_version": ver})
             zip_path = self._download_release_zip(info)
@@ -580,9 +792,34 @@ try {
                 creationflags=creationflags,
                 close_fds=True,
             )
+
+            # Best-effort: confirm the updater actually started by waiting for log output.
+            if wait_for_log_seconds > 0 and script_path is not None:
+                log_path = self.config.state_dir / "update_apply.log"
+                started = False
+                deadline = time.time() + max(1, int(wait_for_log_seconds))
+                while time.time() < deadline:
+                    tail = _tail_text_file(log_path, max_chars=2000)
+                    if tail and "update start" in tail:
+                        started = True
+                        break
+                    time.sleep(0.25)
+                if started:
+                    return True, f"update-started:{ver}", ""
+                # If log didn't show up, still report started but include hint.
+                tail2 = _tail_text_file(log_path, max_chars=2000)
+                hint = "updater launched but no log yet; check ProgramData/update_apply.log"
+                if tail2.strip():
+                    hint = hint + "\n\n" + tail2.strip()[-2000:]
+                return True, f"update-started:{ver}", hint
+
+            return True, f"update-started:{ver}", ""
         except Exception as e:
             self.log.error("apply_update_failed %r", e)
             self._write_health({"update_in_progress": False, "update_failed": True, "update_error": repr(e)[:500]})
+            if raise_on_error:
+                raise
+            return False, "", repr(e)[:800]
 
     def _write_health(self, patch: Dict[str, Any]) -> None:
         try:
@@ -749,8 +986,21 @@ try {
                     cmd_type = str(cmd.get("type") or "")
                     cmd_payload = cmd.get("payload") or {}
 
+                    # Some commands require access to the device token for local decryption.
+                    # Keep it in-memory only (never logged / never posted back).
+                    try:
+                        if isinstance(cmd_payload, dict) and self._token:
+                            # If server sent an encrypted secret payload, inject token in-memory.
+                            # This is required for client-side decrypt (AES-GCM key derived from token).
+                            sv = cmd_payload.get("secret_v")
+                            if int(sv or 0) == 1 and "_device_token" not in cmd_payload:
+                                cmd_payload["_device_token"] = self._token
+                    except Exception:
+                        pass
+
                     self.log.info("execute id=%s type=%s", cmd_id, cmd_type)
-                    if (cmd_type or "").strip().lower() == "agent_update":
+                    ct_norm = (cmd_type or "").strip().lower()
+                    if ct_norm == "agent_update":
                         try:
                             tv = ""
                             if isinstance(cmd_payload, dict):
@@ -760,10 +1010,19 @@ try {
                                 exit_code, out, err = 0, "no-update", ""
                             else:
                                 ver = str(info.get("version") or "").strip()
-                                self.apply_update_if_needed(info, force=True)
-                                exit_code, out, err = 0, f"update-started:{ver or '?'}", ""
+                                started, out2, err2 = self.apply_update_if_needed(
+                                    info,
+                                    force=True,
+                                    raise_on_error=True,
+                                    wait_for_log_seconds=8,
+                                )
+                                exit_code = 0 if started else 1
+                                out = out2 or f"update-started:{ver or '?'}"
+                                err = err2 or ""
                         except Exception:
                             exit_code, out, err = 1, "", traceback.format_exc()[-2000:]
+                    elif ct_norm == "rustdesk_deploy":
+                        exit_code, out, err = self._rustdesk_deploy()
                     else:
                         exit_code, out, err = execute_command(cmd_type, cmd_payload)
                     self.post_result(cmd_id, exit_code=exit_code, stdout=out, stderr=err)
@@ -826,7 +1085,8 @@ try {
         cmd_type = str(cmd.get("type") or "")
         cmd_payload = cmd.get("payload") or {}
 
-        if (cmd_type or "").strip().lower() == "agent_update":
+        ct_norm = (cmd_type or "").strip().lower()
+        if ct_norm == "agent_update":
             try:
                 tv = ""
                 if isinstance(cmd_payload, dict):
@@ -836,10 +1096,19 @@ try {
                     exit_code, out, err = 0, "no-update", ""
                 else:
                     ver = str(info.get("version") or "").strip()
-                    self.apply_update_if_needed(info, force=True)
-                    exit_code, out, err = 0, f"update-started:{ver or '?'}", ""
+                    started, out2, err2 = self.apply_update_if_needed(
+                        info,
+                        force=True,
+                        raise_on_error=True,
+                        wait_for_log_seconds=8,
+                    )
+                    exit_code = 0 if started else 1
+                    out = out2 or f"update-started:{ver or '?'}"
+                    err = err2 or ""
             except Exception:
                 exit_code, out, err = 1, "", traceback.format_exc()[-2000:]
+        elif ct_norm == "rustdesk_deploy":
+            exit_code, out, err = self._rustdesk_deploy()
         else:
             exit_code, out, err = execute_command(cmd_type, cmd_payload)
         self.post_result(cmd_id, exit_code=exit_code, stdout=out, stderr=err)

@@ -251,7 +251,12 @@
                   {% if is_admin %}
                   <option value="cmd_exec">CMD (Admin)</option>
                   <option value="powershell_exec">PowerShell (Admin)</option>
+                  <option value="rustdesk_deploy">RustDesk Deploy (Admin)</option>
                   <option value="exit_password_set">Çıkış Parolası Güncelle (Admin)</option>
+                  <option value="user_password_set">Kullanıcı Parolası Değiştir (Admin)</option>
+                  <option value="local_user_create">Local Kullanıcı Oluştur (Admin)</option>
+                  <option value="local_user_enable">Local Kullanıcı Aktif Et (Admin)</option>
+                  <option value="local_user_disable">Local Kullanıcı Pasif Et (Admin)</option>
                   {% endif %}
                 </select>
               </div>
@@ -391,6 +396,52 @@
                       </div>
                       <div class="col-12">
                         <div class="form-text">Bu parola tüm seçili grup cihazlarının tray çıkışı için uygulanır.</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="user_password_set">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-5">
+                        <label class="form-label form-label-sm" for="g-ups-username">Kullanıcı adı</label>
+                        <input id="g-ups-username" class="form-control form-control-sm mono" type="text" placeholder="Örn: murteza" />
+                      </div>
+                      <div class="col-12 col-md-7">
+                        <label class="form-label form-label-sm" for="g-ups-password">Yeni parola</label>
+                        <input id="g-ups-password" class="form-control form-control-sm" type="password" autocomplete="new-password" placeholder="Yeni parola" />
+                        <div class="form-text">Parola DB'ye düz yazı kaydedilmez; her cihaz için cihaz token'ı ile şifrelenmiş payload olarak saklanır.</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="local_user_create">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-5">
+                        <label class="form-label form-label-sm" for="g-luc-username">Kullanıcı adı</label>
+                        <input id="g-luc-username" class="form-control form-control-sm mono" type="text" placeholder="Örn: destek" />
+                      </div>
+                      <div class="col-12 col-md-7">
+                        <label class="form-label form-label-sm" for="g-luc-password">Parola</label>
+                        <input id="g-luc-password" class="form-control form-control-sm" type="password" autocomplete="new-password" placeholder="Parola" />
+                        <div class="form-text">Parola DB'ye düz yazı kaydedilmez; her cihaz için cihaz token'ı ile şifrelenmiş payload olarak saklanır.</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="local_user_enable">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm" for="g-lue-username">Kullanıcı adı</label>
+                        <input id="g-lue-username" class="form-control form-control-sm mono" type="text" placeholder="Örn: destek" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="group-field d-none" data-for="local_user_disable">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm" for="g-lud-username">Kullanıcı adı</label>
+                        <input id="g-lud-username" class="form-control form-control-sm mono" type="text" placeholder="Örn: destek" />
                       </div>
                     </div>
                   </div>
@@ -638,6 +689,33 @@
         const password = getVal('g-exit-password');
         if (!password) throw new Error('Yeni çıkış parolası gerekli.');
         return { password };
+      }
+      if (cmd === 'user_password_set') {
+        const username = getVal('g-ups-username');
+        const password = (document.getElementById('g-ups-password')?.value ?? '').toString();
+        if (!username) throw new Error('Kullanıcı adı gerekli.');
+        if (!password) throw new Error('Yeni parola gerekli.');
+        return { username, password };
+      }
+
+      if (cmd === 'local_user_create') {
+        const username = getVal('g-luc-username');
+        const password = (document.getElementById('g-luc-password')?.value ?? '').toString();
+        if (!username) throw new Error('Kullanıcı adı gerekli.');
+        if (!password) throw new Error('Parola gerekli.');
+        return { username, password };
+      }
+
+      if (cmd === 'local_user_enable') {
+        const username = getVal('g-lue-username');
+        if (!username) throw new Error('Kullanıcı adı gerekli.');
+        return { username };
+      }
+
+      if (cmd === 'local_user_disable') {
+        const username = getVal('g-lud-username');
+        if (!username) throw new Error('Kullanıcı adı gerekli.');
+        return { username };
       }
       return {};
     };

@@ -8,3 +8,5 @@ pyodbc==5.2.0
 
 passlib==1.7.4
 pydantic-settings==2.7.0
+
+cryptography==42.0.8

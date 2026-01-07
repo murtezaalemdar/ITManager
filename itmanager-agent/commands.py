@@ -152,6 +152,54 @@ def _write_exit_password_record(record: Dict[str, Any]) -> None:
     path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
 
 
+def _derive_key_from_device_token(device_token: str) -> bytes:
+    # Deterministic 32-byte key derived from device token.
+    # Device token must never be logged or persisted.
+    return hashlib.sha256(device_token.encode("utf-8")).digest()
+
+
+def _decrypt_secret_payload(payload: Dict[str, Any]) -> str:
+    """Decrypt an encrypted secret from payload.
+
+    Expected payload shape:
+      {
+        "secret_v": 1,
+        "alg": "aes-256-gcm",
+        "nonce_b64": "...",
+        "ct_b64": "...",
+        "_device_token": "..."  # injected in-memory by agent, never sent by server
+      }
+    """
+    secret_v = int(payload.get("secret_v") or 0)
+    if secret_v != 1:
+        raise ValueError("unsupported secret_v")
+
+    alg = str(payload.get("alg") or "").strip().lower()
+    if alg != "aes-256-gcm":
+        raise ValueError("unsupported alg")
+
+    device_token = payload.get("_device_token")
+    if not device_token:
+        raise ValueError("missing device token")
+
+    nonce_b64 = str(payload.get("nonce_b64") or "").strip()
+    ct_b64 = str(payload.get("ct_b64") or "").strip()
+    if not nonce_b64 or not ct_b64:
+        raise ValueError("missing nonce_b64/ct_b64")
+
+    # Import lazily so the agent can still start even if cryptography isn't installed.
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except Exception as e:
+        raise RuntimeError("cryptography is required for secret decryption") from e
+
+    key = _derive_key_from_device_token(str(device_token))
+    nonce = base64.b64decode(nonce_b64)
+    ct = base64.b64decode(ct_b64)
+    pt = AESGCM(key).decrypt(nonce, ct, None)
+    return pt.decode("utf-8")
+
+
 def get_supported_command_types() -> list[str]:
     """Return a stable list of command types supported by this agent build."""
     # Keep this list in sync with execute_command() and agent-side special handlers.
@@ -189,8 +237,58 @@ def get_supported_command_types() -> list[str]:
             "task_enable",
             "task_disable",
             "exit_password_set",
+            "user_password_set",
+            "local_user_create",
+            "local_user_enable",
+            "local_user_disable",
+            "rustdesk_deploy",
         }
     )
+
+
+def _is_safe_net_user_value(s: str) -> bool:
+    # Block newline/NUL; allow spaces and locale characters.
+    if s is None:
+        return False
+    if "\x00" in s or "\r" in s or "\n" in s:
+        return False
+    return True
+
+
+def _run_net_user(args: list[str], timeout: int = 60) -> Tuple[int, str, str]:
+    try:
+        completed = subprocess.run(
+            ["net", "user", *args],
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=timeout,
+        )
+        if completed.returncode != 0:
+            msg = (completed.stderr or completed.stdout or "net user failed").strip()
+            return completed.returncode or 1, "", msg
+        out = (completed.stdout or "ok").strip() or "ok"
+        return 0, out, ""
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def _run_net_localgroup(args: list[str], timeout: int = 60) -> Tuple[int, str, str]:
+    try:
+        completed = subprocess.run(
+            ["net", "localgroup", *args],
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=timeout,
+        )
+        if completed.returncode != 0:
+            msg = (completed.stderr or completed.stdout or "net localgroup failed").strip()
+            return completed.returncode or 1, "", msg
+        out = (completed.stdout or "ok").strip() or "ok"
+        return 0, out, ""
+    except Exception as e:
+        return 1, "", str(e)
 
 
 def _truncate(s: str, limit: int = 20000) -> str:
@@ -465,6 +563,145 @@ $pretty
 
         # Fallback: msg.exe (cannot control title bar; will show "Message from ...")
         return _run(f"msg * /TIME:{timeout_seconds} {merged}", timeout=timeout_seconds + 5)
+
+    if cmd_type in ("user_password_set",):
+        username = _payload_str(payload, "username").strip()
+        if not username:
+            return 2, "", "missing payload.username"
+
+        try:
+            new_password = _decrypt_secret_payload(payload)
+        except Exception as e:
+            return 2, "", f"secret decrypt failed: {e}"
+
+        # Uses built-in net.exe; requires admin rights.
+        try:
+            completed = subprocess.run(
+                ["net", "user", username, new_password],
+                capture_output=True,
+                text=True,
+                shell=False,
+                timeout=60,
+            )
+            if completed.returncode != 0:
+                msg = (completed.stderr or completed.stdout or "net user failed").strip()
+                return completed.returncode or 1, "", msg
+            return 0, "ok", ""
+        except Exception as e:
+            return 1, "", str(e)
+
+    if cmd_type in ("local_user_create",):
+        if os.name != "nt":
+            return 2, "", "local user create is only available on Windows"
+
+        username = _payload_str(payload, "username").strip()
+        if not username:
+            return 2, "", "missing payload.username"
+        if not _is_safe_net_user_value(username):
+            return 2, "", "invalid payload.username"
+
+        try:
+            password = _decrypt_secret_payload(payload)
+        except Exception as e:
+            return 2, "", f"secret decrypt failed: {e}"
+        if not password:
+            return 2, "", "missing password"
+        if not _is_safe_net_user_value(password):
+            return 2, "", "invalid password"
+
+                # Prefer PowerShell LocalAccounts when available (handles special chars better).
+                u_esc = _escape_ps_single_quotes(username)
+                p_esc = _escape_ps_single_quotes(password)
+
+                ps_create = f"""
+$ErrorActionPreference='Stop'
+$u = '{u_esc}'
+$p = '{p_esc}'
+
+if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {{
+    $existing = Get-LocalUser -Name $u -ErrorAction SilentlyContinue
+    if ($existing) {{ throw 'user already exists' }}
+}}
+
+if (Get-Command New-LocalUser -ErrorAction SilentlyContinue) {{
+    $sec = ConvertTo-SecureString $p -AsPlainText -Force
+    New-LocalUser -Name $u -Password $sec -PasswordNeverExpires:$true -UserMayNotChangePassword:$true | Out-Null
+}} else {{
+    cmd /c "net user \"$u\" \"$p\" /add" | Out-Null
+    if ($LASTEXITCODE -ne 0) {{ throw "net user /add failed (exit=$LASTEXITCODE)" }}
+}}
+
+'ok'
+""".strip()
+
+                code, out, err = _run_powershell(ps_create, timeout=90)
+                if code != 0:
+                        # Fallback: net.exe (may not support spaces in password)
+                        code2, out2, err2 = _run_net_user([username, password, "/add"], timeout=60)
+                        if code2 != 0:
+                                return code2, out2, err2 or err
+
+                # Add to local Administrators group. Resolve group name via SID to support localized Windows.
+                ps_add_admin = f"""
+$ErrorActionPreference='Stop'
+$u = '{u_esc}'
+
+$groupObj = Get-CimInstance Win32_Group -Filter "LocalAccount=True AND SID='S-1-5-32-544'" -ErrorAction SilentlyContinue
+if ($groupObj -and $groupObj.Name) {{
+    $group = $groupObj.Name
+}} else {{
+    $admin = ([System.Security.Principal.SecurityIdentifier]'S-1-5-32-544').Translate([System.Security.Principal.NTAccount]).Value
+    $group = $admin.Split('\\')[-1]
+}}
+
+cmd /c "net localgroup \"$group\" \"$u\" /add" | Out-Null
+if ($LASTEXITCODE -ne 0) {{ throw "net localgroup failed (group=$group, exit=$LASTEXITCODE)" }}
+
+'ok'
+""".strip()
+
+                code3, out3, err3 = _run_powershell(ps_add_admin, timeout=60)
+                if code3 == 0:
+                        return 0, "ok", ""
+
+                # Try common group names (English/Turkish) as a last resort.
+                last_err = err3
+                for group in ("Administrators", "Y\u00f6neticiler"):
+                        c2, _, e2 = _run_net_localgroup([group, username, "/add"], timeout=60)
+                        if c2 == 0:
+                                return 0, "ok", ""
+                        last_err = last_err or e2
+
+                # User may have been created but group add failed; return error so panel doesn't show a false success.
+                return 2, "", f"created but admin group add failed: {last_err or 'unknown error'}"
+
+    if cmd_type in ("local_user_enable", "local_user_disable"):
+        if os.name != "nt":
+            return 2, "", "local user enable/disable is only available on Windows"
+
+        username = _payload_str(payload, "username").strip()
+        if not username:
+            return 2, "", "missing payload.username"
+        if not _is_safe_net_user_value(username):
+            return 2, "", "invalid payload.username"
+
+        u_esc = _escape_ps_single_quotes(username)
+        action = "Enable" if cmd_type == "local_user_enable" else "Disable"
+        active = "yes" if cmd_type == "local_user_enable" else "no"
+        ps = f"""
+$ErrorActionPreference='Stop'
+$u = '{u_esc}'
+if (Get-Command {action}-LocalUser -ErrorAction SilentlyContinue) {{
+  {action}-LocalUser -Name $u -ErrorAction Stop
+}} else {{
+  cmd /c "net user \"$u\" /active:{active}" | Out-String | Out-Null
+}}
+'ok'
+""".strip()
+        code, out, err = _run_powershell(ps, timeout=60)
+        if code == 0:
+            return 0, out or "ok", ""
+        return _run_net_user([username, f"/active:{active}"], timeout=60)
 
     if cmd_type in ("cmd_exec", "cmd"):
         command = _payload_str(payload, "command").strip()

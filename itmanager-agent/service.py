@@ -11,8 +11,6 @@ import win32service
 import win32serviceutil
 import pywintypes
 import ctypes
-
-from agent import ITManagerAgent, StopFlag, load_config
 from pathlib import Path
 
 
@@ -87,6 +85,11 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
 
     def _run_agent_worker(self) -> None:
         try:
+            # Defer importing agent modules until worker thread.
+            # If a build accidentally misses bundled modules, the service will still
+            # connect to SCM (avoids 1053) and we will log the real import error.
+            from agent import ITManagerAgent, load_config
+
             # Config path: prefer ProgramData (stable across upgrades), fallback to EXE dir.
             pd = _ensure_programdata_config_from_runtime()
             config_path = pd if pd.exists() else (_runtime_dir() / "config.json")
@@ -113,6 +116,17 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
                 win32event.SetEvent(self.hWaitStop)
             except Exception:
                 pass
+
+
+class StopFlag:
+    def __init__(self) -> None:
+        self._evt = threading.Event()
+
+    def set(self) -> None:
+        self._evt.set()
+
+    def is_set(self) -> bool:
+        return self._evt.is_set()
 
     def SvcStop(self):
         _boot_log("SvcStop")

@@ -3,3 +3,5 @@ psutil==5.9.8
 pywin32>=307,<312; platform_system=="Windows"
 pystray==0.19.5; platform_system=="Windows"
 Pillow==10.4.0; platform_system=="Windows"
+
+cryptography==42.0.8

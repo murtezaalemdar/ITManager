@@ -131,8 +131,18 @@ def _get_startup_folder() -> Path:
     return Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 
 
-def _startup_shortcut_path() -> Path:
+def _get_common_startup_folder() -> Path:
+    """All-users Startup folder (Common Startup)."""
+    pd = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+    return Path(pd) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
+
+def _user_startup_shortcut_path() -> Path:
     return _get_startup_folder() / "ITManagerAgentTray.lnk"
+
+
+def _common_startup_shortcut_path() -> Path:
+    return _get_common_startup_folder() / "ITManagerAgentTray.lnk"
 
 
 def _install_startup_shortcut() -> Tuple[int, str]:
@@ -143,9 +153,16 @@ def _install_startup_shortcut() -> Tuple[int, str]:
         except Exception as e:
             return 1, f"pywin32/win32com missing: {e!r}"
 
-        startup_dir = _get_startup_folder()
-        startup_dir.mkdir(parents=True, exist_ok=True)
-        lnk_path = _startup_shortcut_path()
+        # Prefer Common Startup (matches installer) when available/admin;
+        # otherwise fall back to per-user Startup.
+        lnk_path = _common_startup_shortcut_path()
+        startup_dir = lnk_path.parent
+        try:
+            startup_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            lnk_path = _user_startup_shortcut_path()
+            startup_dir = lnk_path.parent
+            startup_dir.mkdir(parents=True, exist_ok=True)
 
         # Target depends on whether we're frozen.
         if getattr(sys, "frozen", False):
@@ -176,10 +193,21 @@ def _install_startup_shortcut() -> Tuple[int, str]:
 
 def _uninstall_startup_shortcut() -> Tuple[int, str]:
     try:
-        p = _startup_shortcut_path()
-        if p.exists():
-            p.unlink()
-            return 0, f"Startup kısayolu silindi: {p}"
+        removed = []
+        errors = []
+
+        for p in (_user_startup_shortcut_path(), _common_startup_shortcut_path()):
+            try:
+                if p.exists():
+                    p.unlink()
+                    removed.append(str(p))
+            except Exception as e:
+                errors.append(f"{p}: {e!r}")
+
+        if errors and not removed:
+            return 1, "Startup kısayolu silinemedi: " + "; ".join(errors)
+        if removed:
+            return 0, "Startup kısayolu silindi: " + ", ".join(removed)
         return 0, "Startup kısayolu zaten yok"
     except Exception as e:
         return 1, f"Startup kısayolu silinemedi: {e!r}"
@@ -187,7 +215,8 @@ def _uninstall_startup_shortcut() -> Tuple[int, str]:
 
 def _is_startup_enabled() -> bool:
     try:
-        return _startup_shortcut_path().exists()
+        # Consider both per-user and common Startup shortcuts.
+        return _user_startup_shortcut_path().exists() or _common_startup_shortcut_path().exists()
     except Exception:
         return False
 
@@ -876,6 +905,16 @@ def main() -> int:
         except Exception as e:
             _log_line(f"open_config failed: {e!r}")
             notify("config açılamadı")
+
+    def _defer_menu_action(fn) -> None:
+        def _work():
+            try:
+                time.sleep(0.25)
+                fn()
+            except Exception as e:
+                _log_line(f"defer_menu_action failed: {e!r}")
+
+        threading.Thread(target=_work, daemon=True).start()
 
     def _prompt_update_version() -> str:
         """Ask user for a target version (blank => latest)."""

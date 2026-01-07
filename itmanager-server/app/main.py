@@ -59,6 +59,35 @@ _ISO_DT_RE = re.compile(
 )
 
 
+def _encrypt_secret_for_device(device_token: str, secret: str) -> dict[str, Any]:
+    """Encrypt a short secret so it can be stored in Command.payload_json without plaintext.
+
+    Key derivation must match agent-side decryption:
+    key = sha256(device_token)
+    alg = AES-256-GCM
+    """
+
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except Exception as e:
+        raise RuntimeError("cryptography is required for secret encryption") from e
+
+    token = str(device_token or "")
+    if not token:
+        raise ValueError("missing device token")
+
+    key = hashlib.sha256(token.encode("utf-8")).digest()
+    nonce = secrets.token_bytes(12)
+    ct = AESGCM(key).encrypt(nonce, (secret or "").encode("utf-8"), None)
+
+    return {
+        "secret_v": 1,
+        "alg": "aes-256-gcm",
+        "nonce_b64": base64.b64encode(nonce).decode("ascii"),
+        "ct_b64": base64.b64encode(ct).decode("ascii"),
+    }
+
+
 def _try_pretty_tr_datetime_from_iso(s: str) -> str | None:
     s = (s or "").strip()
     if not s or not _ISO_DT_RE.match(s):
@@ -501,6 +530,22 @@ def devices(request: Request, db=Depends(db_session)):
         except Exception:
             d.ui_supports_agent_update = False
 
+        try:
+            d.ui_supports_user_password_set = _require_min_agent_version(d, "0.2.38")
+        except Exception:
+            d.ui_supports_user_password_set = False
+
+        try:
+            # Local user management is supported starting with agent 0.2.46.
+            d.ui_supports_local_user_mgmt = _require_min_agent_version(d, "0.2.46")
+        except Exception:
+            d.ui_supports_local_user_mgmt = False
+
+        try:
+            d.ui_supports_rustdesk_deploy = _require_min_agent_version(d, "0.2.43")
+        except Exception:
+            d.ui_supports_rustdesk_deploy = False
+
     resp = templates.TemplateResponse(
         "devices.html",
         {
@@ -566,6 +611,22 @@ def device_detail(device_id: int, request: Request, db=Depends(db_session)):
         dev.ui_supports_agent_update = _require_min_agent_version(dev, "0.2.28")
     except Exception:
         dev.ui_supports_agent_update = False
+
+    try:
+        dev.ui_supports_user_password_set = _require_min_agent_version(dev, "0.2.38")
+    except Exception:
+        dev.ui_supports_user_password_set = False
+
+    try:
+        # Local user management is supported starting with agent 0.2.46.
+        dev.ui_supports_local_user_mgmt = _require_min_agent_version(dev, "0.2.46")
+    except Exception:
+        dev.ui_supports_local_user_mgmt = False
+
+    try:
+        dev.ui_supports_rustdesk_deploy = _require_min_agent_version(dev, "0.2.43")
+    except Exception:
+        dev.ui_supports_rustdesk_deploy = False
 
     recent_commands = db.scalars(
         select(Command)
@@ -819,6 +880,51 @@ def _agent_releases_dir() -> Path:
     return base
 
 
+def _agent_tools_dir() -> Path:
+    # Keep tools under the same root as agent releases to simplify deployment.
+    # Expected layout:
+    #   <agent_releases_dir>/tools/windows/<files>
+    return _agent_releases_dir() / "tools" / "windows"
+
+
+def _get_latest_tool_file(prefix: str) -> Path | None:
+    base = _agent_tools_dir()
+    if not base.exists():
+        return None
+
+    pref = (prefix or "").strip().lower()
+    if not pref:
+        return None
+
+    # Allow common formats. For stability we prefer MSI, then EXE, then ZIP.
+    # Also prefer x64 builds if the filename hints it.
+    exts = {".msi", ".exe", ".zip"}
+    candidates = [
+        p
+        for p in base.iterdir()
+        if p.is_file() and p.suffix.lower() in exts and p.name.lower().startswith(pref)
+    ]
+    if not candidates:
+        return None
+
+    def _rank(p: Path) -> tuple[int, int, float, str]:
+        name = p.name.lower()
+        ext = p.suffix.lower()
+        # ext priority
+        ext_pri = {".msi": 0, ".exe": 1, ".zip": 2}.get(ext, 9)
+        # x64 hint priority
+        arch_pri = 0 if ("x86_64" in name or "x64" in name or "amd64" in name) else 1
+        try:
+            mtime = float(p.stat().st_mtime)
+        except Exception:
+            mtime = 0.0
+        # Lower is better for pri; newer mtime is better.
+        return (ext_pri, arch_pri, -mtime, name)
+
+    candidates.sort(key=_rank)
+    return candidates[0]
+
+
 _RELEASE_VERSION_RE = re.compile(r"(?P<version>\d+\.\d+\.\d+)(?:[^\\/]*?)\.zip$", re.IGNORECASE)
 
 
@@ -1058,6 +1164,11 @@ def _decorate_command_for_ui(c: Command) -> None:
         "cmd_exec": "CMD (Admin)",
         "powershell_exec": "PowerShell (Admin)",
         "exit_password_set": "Çıkış Parolası Güncelle",
+        "user_password_set": "Kullanıcı Parolası Değiştir",
+        "local_user_create": "Local Kullanıcı Oluştur",
+        "local_user_enable": "Local Kullanıcı Aktif Et",
+        "local_user_disable": "Local Kullanıcı Pasif Et",
+        "rustdesk_deploy": "RustDesk Deploy",
     }
 
     cmd_type = (c.type or "").strip().lower()
@@ -1099,6 +1210,12 @@ def _decorate_command_for_ui(c: Command) -> None:
                 c.ui_request = iso
             elif cmd_type == "exit_password_set":
                 c.ui_request = "(gizli)"
+            elif cmd_type == "user_password_set":
+                u = str(payload.get("username") or "").strip()
+                c.ui_request = u or "(gizli)"
+            elif cmd_type in ("local_user_create", "local_user_enable", "local_user_disable"):
+                u = str(payload.get("username") or "").strip()
+                c.ui_request = u or ""
     except Exception:
         c.ui_request = ""
 
@@ -1237,6 +1354,11 @@ def send_command(
         "cmd_exec",
         "powershell_exec",
         "exit_password_set",
+        "user_password_set",
+        "local_user_create",
+        "local_user_enable",
+        "local_user_disable",
+        "rustdesk_deploy",
     }
     if (type or "").strip() not in allowed_types:
         raise HTTPException(status_code=400, detail="invalid command type")
@@ -1250,8 +1372,26 @@ def send_command(
 
     # agent_update is best-effort: old agents may respond with 'unknown command type'.
 
+    # user_password_set require agent v0.2.38+
+    if (type or "").strip() in {"user_password_set"}:
+        if not _require_min_agent_version(dev, "0.2.38"):
+            msg = f"Bu komut için agent güncel değil (min 0.2.38). Cihaz: {dev.hostname} sürüm={dev.agent_version or 'unknown'}"
+            return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
+
+    # local_user_* require agent v0.2.46+
+    if (type or "").strip() in {"local_user_create", "local_user_enable", "local_user_disable"}:
+        if not _require_min_agent_version(dev, "0.2.46"):
+            msg = f"Bu komut için agent güncel değil (min 0.2.46). Cihaz: {dev.hostname} sürüm={dev.agent_version or 'unknown'}"
+            return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
+
+    # rustdesk_deploy require agent v0.2.43+
+    if (type or "").strip() in {"rustdesk_deploy"}:
+        if not _require_min_agent_version(dev, "0.2.43"):
+            msg = f"Bu komut için agent güncel değil (min 0.2.43). Cihaz: {dev.hostname} sürüm={dev.agent_version or 'unknown'}"
+            return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
+
     # High-risk commands are admin-only.
-    if (type or "").strip() in {"cmd_exec", "powershell_exec", "exit_password_set"}:
+    if (type or "").strip() in {"cmd_exec", "powershell_exec", "exit_password_set", "user_password_set", "local_user_create", "local_user_enable", "local_user_disable", "rustdesk_deploy"}:
         require_admin_user(request, db)
 
     # validate payload is JSON
@@ -1282,8 +1422,94 @@ def send_command(
             msg = "Parola güncelleme: geçersiz payload (password gerekli)"
             return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
 
+    if cmd_type == "user_password_set":
+        try:
+            if not isinstance(parsed_payload, dict):
+                raise ValueError("payload must be an object")
+            username = str(parsed_payload.get("username") or "").strip()
+            pw = str(parsed_payload.get("password") or "")
+            if not username:
+                raise ValueError("username is required")
+            if not pw:
+                raise ValueError("password is required")
+
+            enc = _encrypt_secret_for_device(dev.token, pw)
+            parsed_payload = {"username": username, **enc}
+        except Exception:
+            msg = "Kullanıcı parolası güncelleme: geçersiz payload (username/password gerekli)"
+            return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
+
+    if cmd_type == "local_user_create":
+        try:
+            if not isinstance(parsed_payload, dict):
+                raise ValueError("payload must be an object")
+            username = str(parsed_payload.get("username") or "").strip()
+            pw = str(parsed_payload.get("password") or "")
+            if not username:
+                raise ValueError("username is required")
+            if not pw:
+                raise ValueError("password is required")
+
+            enc = _encrypt_secret_for_device(dev.token, pw)
+            parsed_payload = {"username": username, **enc}
+        except Exception:
+            msg = "Local kullanıcı oluşturma: geçersiz payload (username/password gerekli)"
+            return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
+
+    if cmd_type in {"local_user_enable", "local_user_disable"}:
+        try:
+            if not isinstance(parsed_payload, dict):
+                raise ValueError("payload must be an object")
+            username = str(parsed_payload.get("username") or "").strip()
+            if not username:
+                raise ValueError("username is required")
+            parsed_payload = {"username": username}
+        except Exception:
+            msg = "Local kullanıcı işlem: geçersiz payload (username gerekli)"
+            return RedirectResponse(f"/devices/{device_id}?err={quote(msg)}", status_code=302)
+
+    def _ps_quote_single(s: str) -> str:
+        return "'" + (s or "").replace("'", "''") + "'"
+
+    def _ps_add_to_local_admins_script(username: str) -> str:
+        # Uses SID S-1-5-32-544 to resolve the localized Administrators group name.
+        u = _ps_quote_single(username)
+        return "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                f"$u = {u}",
+                "$sid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')",
+                "try { $grp = ($sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\') | Select-Object -Last 1) } catch { $grp = 'Administrators' }",
+                "if (Get-Command Add-LocalGroupMember -ErrorAction SilentlyContinue) {",
+                "  Add-LocalGroupMember -Group $grp -Member $u -ErrorAction Stop",
+                "} else {",
+                "  $out = (net localgroup \"$grp\" \"$u\" /add) 2>&1 | Out-String",
+                "  Write-Output $out",
+                "  if ($LASTEXITCODE -ne 0) { throw ('net localgroup failed exit=' + $LASTEXITCODE) }",
+                "}",
+                "Write-Output ('OK: added ' + $u + ' to ' + $grp)",
+            ]
+        )
+
     cmd = Command(device_id=device_id, type=cmd_type, payload_json=json.dumps(parsed_payload), status="queued")
     db.add(cmd)
+
+    # Chain: after creating the local user, also add them to local Administrators.
+    # This keeps agent-side changes minimal; the second command will fail loudly if the first one fails.
+    if cmd_type == "local_user_create":
+        try:
+            username = str(parsed_payload.get("username") or "").strip()
+            if username:
+                ps_payload = {
+                    "script": _ps_add_to_local_admins_script(username),
+                    "timeout": 120,
+                }
+                cmd2 = Command(device_id=device_id, type="powershell_exec", payload_json=json.dumps(ps_payload), status="queued")
+                db.add(cmd2)
+        except Exception:
+            # If we fail to build/enqueue the follow-up command, still send the original command.
+            pass
+
     db.commit()
 
     return RedirectResponse(f"/devices/{device_id}?cmd={quote((type or '').strip())}&sent=1", status_code=302)
@@ -1427,13 +1653,18 @@ def send_group_command(
         "cmd_exec",
         "powershell_exec",
         "exit_password_set",
+        "user_password_set",
+        "local_user_create",
+        "local_user_enable",
+        "local_user_disable",
+        "rustdesk_deploy",
     }
     cmd_type = (type or "").strip()
     if cmd_type not in allowed_types:
         raise HTTPException(status_code=400, detail="invalid command type")
 
     # High-risk commands are admin-only.
-    if cmd_type in {"cmd_exec", "powershell_exec", "exit_password_set"}:
+    if cmd_type in {"cmd_exec", "powershell_exec", "exit_password_set", "user_password_set", "local_user_create", "local_user_enable", "local_user_disable", "rustdesk_deploy"}:
         require_admin_user(request, db)
 
     # validate payload is JSON
@@ -1463,6 +1694,52 @@ def send_group_command(
             msg = "Parola güncelleme: geçersiz payload (password gerekli)"
             return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
 
+    # Validate group password-set payload once (encryption happens per-device token in the loop).
+    user_password_username: str | None = None
+    user_password_plain: str | None = None
+    if cmd_type == "user_password_set":
+        try:
+            if not isinstance(parsed_payload, dict):
+                raise ValueError("payload must be an object")
+            user_password_username = str(parsed_payload.get("username") or "").strip()
+            user_password_plain = str(parsed_payload.get("password") or "")
+            if not user_password_username:
+                raise ValueError("username is required")
+            if not user_password_plain:
+                raise ValueError("password is required")
+        except Exception:
+            msg = "Kullanıcı parolası güncelleme: geçersiz payload (username/password gerekli)"
+            return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
+
+    # Validate group local_user_create payload once (encryption happens per-device token in the loop).
+    local_create_username: str | None = None
+    local_create_plain: str | None = None
+    if cmd_type == "local_user_create":
+        try:
+            if not isinstance(parsed_payload, dict):
+                raise ValueError("payload must be an object")
+            local_create_username = str(parsed_payload.get("username") or "").strip()
+            local_create_plain = str(parsed_payload.get("password") or "")
+            if not local_create_username:
+                raise ValueError("username is required")
+            if not local_create_plain:
+                raise ValueError("password is required")
+        except Exception:
+            msg = "Local kullanıcı oluşturma: geçersiz payload (username/password gerekli)"
+            return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
+
+    if cmd_type in {"local_user_enable", "local_user_disable"}:
+        try:
+            if not isinstance(parsed_payload, dict):
+                raise ValueError("payload must be an object")
+            u = str(parsed_payload.get("username") or "").strip()
+            if not u:
+                raise ValueError("username is required")
+            parsed_payload = {"username": u}
+        except Exception:
+            msg = "Local kullanıcı işlem: geçersiz payload (username gerekli)"
+            return RedirectResponse(f"/devices?group_id={group_id}&err={quote(msg)}", status_code=302)
+
     devices = db.scalars(select(Device).where(Device.groups.any(Group.id == group_id))).all()
     if not devices:
         msg = f"Grup '{grp.name}': cihaz yok"
@@ -1490,11 +1767,55 @@ def send_group_command(
                 skipped += 1
                 continue
 
+        if cmd_type in {"user_password_set"}:
+            try:
+                if not _require_min_agent_version(dev, "0.2.38"):
+                    skipped += 1
+                    continue
+            except Exception:
+                skipped += 1
+                continue
+
+        if cmd_type in {"local_user_create", "local_user_enable", "local_user_disable"}:
+            try:
+                if not _require_min_agent_version(dev, "0.2.46"):
+                    skipped += 1
+                    continue
+            except Exception:
+                skipped += 1
+                continue
+
+        if cmd_type in {"rustdesk_deploy"}:
+            try:
+                if not _require_min_agent_version(dev, "0.2.43"):
+                    skipped += 1
+                    continue
+            except Exception:
+                skipped += 1
+                continue
+
+        payload_for_device = parsed_payload
+        if cmd_type == "user_password_set":
+            try:
+                enc = _encrypt_secret_for_device(dev.token, str(user_password_plain or ""))
+                payload_for_device = {"username": str(user_password_username or ""), **enc}
+            except Exception:
+                skipped += 1
+                continue
+
+        if cmd_type == "local_user_create":
+            try:
+                enc = _encrypt_secret_for_device(dev.token, str(local_create_plain or ""))
+                payload_for_device = {"username": str(local_create_username or ""), **enc}
+            except Exception:
+                skipped += 1
+                continue
+
         db.add(
             Command(
                 device_id=dev.id,
                 type=cmd_type,
-                payload_json=json.dumps(parsed_payload),
+                payload_json=json.dumps(payload_for_device),
                 status="queued",
             )
         )
@@ -1856,6 +2177,46 @@ def agent_update_tool_ps1(enrollment_token: str = "", version: str = "", db=Depe
     # Enrollment-token protected helper script for very old agents.
     require_enrollment_token(enrollment_token, db)
     return PlainTextResponse(_agent_update_tool_ps1(version), media_type="text/plain; charset=utf-8")
+
+
+@app.get("/api/agent/tools/rustdesk/latest")
+def agent_rustdesk_latest(request: Request, db=Depends(db_session)):
+    # Only enrolled agents can fetch tool metadata.
+    require_agent_token(request, db)
+
+    cfg = (getattr(settings, "rustdesk_config_string", "") or "").strip()
+    if not cfg:
+        raise HTTPException(status_code=409, detail="rustdesk self-host config not set")
+
+    path = _get_latest_tool_file("rustdesk")
+    if not path:
+        raise HTTPException(status_code=404, detail="rustdesk tool not found")
+
+    sha = _sha256_file(path)
+    out = {
+        "filename": path.name,
+        "size_bytes": path.stat().st_size,
+        "sha256": sha,
+        "download_url": "/api/agent/tools/rustdesk/download",
+        "config_string": cfg,
+    }
+
+    # Optional: set a permanent password post-install without writing it to DB.
+    pw = (getattr(settings, "rustdesk_password", "") or "").strip()
+    if pw:
+        out["password"] = pw
+
+    return out
+
+
+@app.get("/api/agent/tools/rustdesk/download")
+def agent_rustdesk_download(request: Request, db=Depends(db_session)):
+    require_agent_token(request, db)
+    path = _get_latest_tool_file("rustdesk")
+    if not path:
+        raise HTTPException(status_code=404, detail="rustdesk tool not found")
+    # Content-Type depends on file, but octet-stream is the safest default.
+    return FileResponse(path=str(path), media_type="application/octet-stream", filename=path.name)
 
 
 @app.get("/api/agent/releases/download")

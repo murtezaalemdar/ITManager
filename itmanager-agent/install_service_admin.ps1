@@ -26,6 +26,36 @@ if (-not (Test-IsAdmin)) {
 
 Set-Location -LiteralPath (Split-Path -Parent $PSCommandPath)
 
+function Ensure-ServiceRunning([string]$ServiceName, [int]$Attempts = 10, [int]$SleepSeconds = 3) {
+  for ($i = 1; $i -le $Attempts; $i++) {
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($null -eq $svc) {
+      throw "Service not found: $ServiceName"
+    }
+    if ($svc.Status -eq 'Running') {
+      return
+    }
+
+    Write-Host "[INFO] Servis start denemesi $i/$($Attempts): $ServiceName (mevcut=$($svc.Status))" -ForegroundColor Yellow
+    try { Start-Service -Name $ServiceName -ErrorAction SilentlyContinue } catch { }
+    try { sc.exe start $ServiceName | Out-Null } catch { }
+
+    # Wait a bit for transition to RUNNING
+    Start-Sleep -Seconds 2
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($null -ne $svc -and $svc.Status -eq 'Running') {
+      return
+    }
+
+    if ($i -lt $Attempts) {
+      Start-Sleep -Seconds $SleepSeconds
+    }
+  }
+
+  sc.exe query $ServiceName | Out-Host
+  throw "Service did not reach RUNNING after $Attempts attempts: $ServiceName"
+}
+
 $srcExe = Join-Path (Get-Location) 'ITManagerAgentService.exe'
 if (-not (Test-Path $srcExe)) {
   throw "ITManagerAgentService.exe bulunamadı: $srcExe"
@@ -51,6 +81,9 @@ if ($Reinstall) {
 $startup = if ($Delayed) { 'delayed' } else { 'auto' }
 
 & $exe --startup $startup install | Out-Host
+if ($LASTEXITCODE -ne 0) {
+  throw "Service install failed (exit=$LASTEXITCODE)"
+}
 
 # Also set startup type via sc.exe for reliability after reboot
 $startupSc = if ($Delayed) { 'delayed-auto' } else { 'auto' }
@@ -62,6 +95,12 @@ sc.exe failureflag ITManagerAgent 1 | Out-Null
 
 if (-not $NoStart) {
   & $exe --wait 30 start | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    throw "Service start command failed (exit=$LASTEXITCODE)"
+  }
+
+  # Verify service is actually running; retry a few times (some machines need extra time).
+  Ensure-ServiceRunning -ServiceName 'ITManagerAgent' -Attempts 10 -SleepSeconds 3
 }
 
 sc.exe query ITManagerAgent | Out-Host

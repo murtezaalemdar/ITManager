@@ -109,6 +109,10 @@ $pyiArgs = @(
   "--name", $Name,
   "--workpath", $pyiWork,
   "--distpath", $pyiDist,
+  # Force-bundle local agent modules used by the service at runtime.
+  "--hidden-import", "agent",
+  "--hidden-import", "commands",
+  "--hidden-import", "version",
   "--hidden-import", "servicemanager",
   "--hidden-import", "win32serviceutil",
   "--hidden-import", "win32service",
