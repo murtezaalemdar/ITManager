@@ -58,3 +58,7 @@ itmanager-agent/build-work/
 # node
 node_modules/
 package-lock.json
+# Ignore workspace backups and build artifacts
+backups/
+*.zip
+*.zip.sha256
