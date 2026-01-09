@@ -1,38 +1,43 @@
 #!/usr/bin/env python3
-import re
 import os
 import sys
 from pathlib import Path
 
+# Canonical RustDesk2.toml content
+CONTENT = """rendezvous_server = '192.168.0.6:21116'
+nat_type = 1
+serial = 0
+unlock_pin = ''
+trusted_devices = ''
+
+[options]
+direct-server = 'Y'
+allow-remote-config-modification = 'Y'
+relay-server = '192.168.0.6'
+av1-test = 'Y'
+api-server = 'http://192.168.0.6'
+key = 'XpzXX98VWqJlMrvAQdwnGCkjeHInP5dwIx1CsE6jOqQ='
+local-ip-addr = ''
+custom-rendezvous-server = '192.168.0.6'
+"""
+
+def write_dest(path: Path):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(CONTENT, encoding='utf-8')
+        print(f'WROTE: {path}')
+    except Exception as e:
+        print(f'ERROR writing {path}: {e}', file=sys.stderr)
+
 def main():
-    env_path = Path("itmanager-server") / ".env"
-    if not env_path.exists():
-        print(f"HATA: {env_path} bulunamadı", file=sys.stderr)
-        return 2
+    userprofile = Path(os.environ.get('USERPROFILE') or Path.home())
+    dest = userprofile / 'AppData' / 'Roaming' / 'RustDesk' / 'config' / 'RustDesk2.toml'
+    write_dest(dest)
 
-    s = env_path.read_text(encoding="utf-8")
+    # Also write a workspace copy (build folder)
+    ws_dest = Path(__file__).resolve().parent.parent / 'build' / 'RustDesk2.toml'
+    write_dest(ws_dest)
 
-    m = re.search(r"RUSTDESK_CONFIG_STRING\s*=\s*(?P<q>[\"\'])(?P<v>.*?)(?P=q)", s, flags=re.S)
-    if m:
-        val = m.group("v")
-    else:
-        m2 = re.search(r"RUSTDESK_CONFIG_STRING\s*=\s*(.+)", s)
-        if m2:
-            val = m2.group(1).strip().strip('"\'')
-        else:
-            print("HATA: RUSTDESK_CONFIG_STRING bulunamadı", file=sys.stderr)
-            return 3
-
-    # Replace escaped newlines (\n) with real newlines
-    toml = val.replace('\\n', '\n')
-
-    # Destination in Windows AppData Roaming
-    userprofile = os.environ.get('USERPROFILE') or os.path.expanduser('~')
-    dest = Path(userprofile) / 'AppData' / 'Roaming' / 'RustDesk' / 'config' / 'RustDesk2.toml'
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(toml, encoding='utf-8')
-
-    print(f"Yazıldı: {dest}")
     return 0
 
 if __name__ == '__main__':

@@ -2184,9 +2184,21 @@ def agent_rustdesk_latest(request: Request, db=Depends(db_session)):
     # Only enrolled agents can fetch tool metadata.
     require_agent_token(request, db)
 
-    cfg = (getattr(settings, "rustdesk_config_string", "") or "").strip()
-    if not cfg:
-        raise HTTPException(status_code=409, detail="rustdesk self-host config not set")
+    # NOTE: Older agents treat non-2xx as a hard failure and will return a traceback
+    # to the panel. To keep UX clean, we return 200 even if config is missing,
+    # with config_string empty. Agent-side code already checks for empty config.
+    raw_cfg = (getattr(settings, "rustdesk_config_string", "") or "")
+    # If the value was stored with literal escape sequences (e.g. "line1\\nline2")
+    # convert common escapes into actual characters so agents receive the proper
+    # multi-line TOML. Also strip surrounding quotes if present.
+    try:
+        cfg_candidate = raw_cfg
+        if cfg_candidate.startswith('"') and cfg_candidate.endswith('"'):
+            cfg_candidate = cfg_candidate[1:-1]
+        # Interpret common Python-style escapes (\\n, \\t, etc.) into real characters.
+        cfg = bytes(cfg_candidate, "utf-8").decode("unicode_escape").strip()
+    except Exception:
+        cfg = raw_cfg.strip()
 
     path = _get_latest_tool_file("rustdesk")
     if not path:

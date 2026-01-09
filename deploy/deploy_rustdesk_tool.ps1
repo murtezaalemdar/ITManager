@@ -37,4 +37,16 @@ ssh -i $KeyPath $Server "mkdir -p '$RemoteToolsDir'" | Out-Null
 scp -i $KeyPath $msi.FullName "${Server}:$RemoteToolsDir/$($msi.Name)" | Out-Null
 Write-Host "[deploy-rustdesk] Uploaded: $RemoteToolsDir/$($msi.Name)" -ForegroundColor Green
 
+Write-Host "[deploy-rustdesk] Uploaded: $RemoteToolsDir/$($msi.Name)" -ForegroundColor Green
+
+# RustDesk2.toml dosyasını da upload et
+$localToml = Join-Path $localToolsDir 'RustDesk2.toml'
+if (Test-Path -LiteralPath $localToml) {
+  Write-Host "[deploy-rustdesk] Uploading RustDesk2.toml to $Server" -ForegroundColor Cyan
+  scp -i $KeyPath $localToml "${Server}:$RemoteToolsDir/RustDesk2.toml" | Out-Null
+  Write-Host "[deploy-rustdesk] Uploaded: $RemoteToolsDir/RustDesk2.toml" -ForegroundColor Green
+} else {
+  Write-Host "[deploy-rustdesk] RustDesk2.toml bulunamadı: $localToml" -ForegroundColor Yellow
+}
+
 Write-Host "[deploy-rustdesk] Done" -ForegroundColor Green
