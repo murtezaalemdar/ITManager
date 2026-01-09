@@ -426,6 +426,27 @@ class ITManagerAgent:
                 except Exception as e:
                     err_msgs.append(f"rustdesk --get-id exception: {e}")
 
+                # Also write the config string into per-user AppData Roaming locations (RustDesk2.toml).
+                try:
+                    if os.name == "nt":
+                        users_root = Path(os.environ.get("SYSTEMDRIVE", "C:") ) / "Users"
+                        if users_root.exists():
+                            for prof in users_root.iterdir():
+                                try:
+                                    if not prof.is_dir():
+                                        continue
+                                    name = prof.name.lower()
+                                    # Skip known non-user profiles
+                                    if name in ("public", "default", "default user", "defaultuser0", "all users", "desktop.ini"):
+                                        continue
+                                    dest_dir = prof / "AppData" / "Roaming" / "RustDesk" / "config"
+                                    dest_dir.mkdir(parents=True, exist_ok=True)
+                                    (dest_dir / "RustDesk2.toml").write_text(cfg, encoding="utf-8")
+                                except Exception as e:
+                                    err_msgs.append(f"appdata write {prof.name} error: {e}")
+                except Exception as e:
+                    err_msgs.append(f"appdata write root error: {e}")
+
                 return rustdesk_id, "\n".join([m for m in err_msgs if m])
 
             if ext == ".msi":
