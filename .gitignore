@@ -62,3 +62,19 @@ package-lock.json
 backups/
 *.zip
 *.zip.sha256
+
+# local release downloads (from GitHub Releases)
+agent-releases/downloaded/
+
+# wheels (offline / CI helpers) - never commit
+wheels/
+*.whl
+itmanager-agent/wheels-win32/
+itmanager-agent/wheels-win7/
+itmanager-agent/wheels-win7-32/
+
+# local backup mirror
+github-itmanager-backup/
+
+# legacy: workflow should live at repo root .github/
+itmanager-agent/.github/
