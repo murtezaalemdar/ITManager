@@ -131,6 +131,7 @@ jobs:
             --hidden-import "win32service" `
             --hidden-import "win32event" `
             --hidden-import "win32api" `
+            --hidden-import "win32timezone" `
             service.py
 
           # Build Tray
