@@ -1,7 +1,9 @@
 Param(
   [string]$Server = "root@192.168.0.6",
   [string]$KeyPath = "$(Join-Path $env:USERPROFILE '.ssh\itmanager_root_192_168_0_6')",
-  [string]$RemoteReleaseDir = "/opt/itmanager/itmanager-server/agent-releases/windows",
+  [string]$Platform = "windows", # windows | windows7
+  [string]$RemoteReleaseDir = "",
+  [string]$PyVersion = "",       # optional: passed to build_agent_exe.ps1
   [switch]$NoBuild,
   [switch]$NoRestartServer
 )
@@ -35,7 +37,11 @@ if (-not $NoBuild) {
   Push-Location $agentDir
   try {
     # build_agent_exe.ps1 now bumps patch by default.
-    & $buildScript
+    if ($PyVersion) {
+      & $buildScript -Platform $Platform -PyVersion $PyVersion
+    } else {
+      & $buildScript -Platform $Platform
+    }
   } finally {
     Pop-Location
   }
@@ -58,7 +64,7 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
   throw "Invalid SemVer in version.py: $version"
 }
 
-$zipName = "itmanager-agent-windows-$version.zip"
+$zipName = "itmanager-agent-$Platform-$version.zip"
 $zipPath = Join-Path $agentDir $zipName
 $shaPath = "$zipPath.sha256"
 
@@ -70,6 +76,9 @@ if (-not (Test-Path -LiteralPath $shaPath)) {
 }
 
 Write-Host "[deploy-agent] Uploading $zipName to $Server" -ForegroundColor Cyan
+if (-not $RemoteReleaseDir) {
+  $RemoteReleaseDir = "/opt/itmanager/itmanager-server/agent-releases/$Platform"
+}
 ssh -i $KeyPath $Server "mkdir -p '$RemoteReleaseDir'" | Out-Null
 scp -i $KeyPath $zipPath "${Server}:$RemoteReleaseDir/$zipName" | Out-Null
 scp -i $KeyPath $shaPath "${Server}:$RemoteReleaseDir/$zipName.sha256" | Out-Null
