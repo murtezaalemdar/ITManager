@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -114,7 +114,19 @@ def _sha256_file(path: Path) -> str:
 
 def _platform_name() -> str:
     if os.name == "nt":
-        return "windows"
+        import struct
+        is_32bit = struct.calcsize("P") * 8 == 32
+        try:
+            import sys
+            v = sys.getwindowsversion()
+            # Windows 7 / Server 2008 R2 = major 6, minor 1
+            # Windows Vista / Server 2008 = major 6, minor 0
+            if v.major < 6 or (v.major == 6 and v.minor <= 1):
+                return "windows7-32" if is_32bit else "windows7"
+        except Exception:
+            pass
+        # Windows 10/11 için 32-bit kontrolü
+        return "windows-32" if is_32bit else "windows"
     return "unknown"
 
 
@@ -363,7 +375,7 @@ class ITManagerAgent:
             install_root = pd / "ITManager" / "tools" / "rustdesk"
             install_root.mkdir(parents=True, exist_ok=True)
 
-            def _run_no_window(args: list[str], timeout: int = 600) -> subprocess.CompletedProcess:
+            def _run_no_window(args: List[str], timeout: int = 600) -> subprocess.CompletedProcess:
                 kwargs = {
                     "stdout": subprocess.PIPE,
                     "stderr": subprocess.PIPE,
@@ -397,7 +409,7 @@ class ITManagerAgent:
             def _apply_rustdesk_config(rustdesk_exe: Path) -> tuple[Optional[str], str]:
                 # Apply config string and optionally set permanent password.
                 # IMPORTANT: do not return the password to avoid storing plaintext in server DB.
-                err_msgs: list[str] = []
+                err_msgs: List[str] = []
                 try:
                     cp = _run_no_window([str(rustdesk_exe), "--config", cfg], timeout=60)
                     if cp.returncode != 0:

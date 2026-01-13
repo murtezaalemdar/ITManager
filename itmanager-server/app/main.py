@@ -792,7 +792,14 @@ try {{
     $wc = New-Object System.Net.WebClient
     $wc.Headers['Accept'] = 'application/json'
 
+    # Windows 7 / Server 2008 R2 veya öncesi için windows7 platformu kullan
     $plat = 'windows'
+    try {{
+        $osv = [Environment]::OSVersion.Version
+        if ($osv.Major -lt 6 -or ($osv.Major -eq 6 -and $osv.Minor -le 1)) {{ $plat = 'windows7' }}
+    }} catch {{ }}
+    Log ('platform=' + $plat)
+
     $tv = '{tv_ps}'
     $relUrl = $base + '/api/agent/releases/enroll/latest?platform=' + $plat + '&enrollment_token=' + [uri]::EscapeDataString($enroll)
     if ($tv) {{ $relUrl = $relUrl + '&version=' + [uri]::EscapeDataString($tv) }}
@@ -974,36 +981,84 @@ def _fmt_bytes_tr(n: Any) -> str:
 def _format_inventory_for_ui(inv: dict[str, Any]) -> dict[str, Any]:
     # Build an ordered mapping for nicer UI rendering.
     ordered_keys = [
-        "ts",
-        "hostname",
-        "platform",
-        "machine",
-        "processor",
-        "python",
-        "ram_total",
-        "ram_available",
-        "cpu_count",
+        "Saat",
+        "Bilgisayar Adı",
+        "Marka",
+        "Model",
+        "Seri No",
+        "İşlemci",
+        "CPU Sıcaklığı",
+        "Takılı RAM",
+        "İşletim Sistemi",
         "disks",
     ]
 
     out: dict[str, Any] = {}
+
+    # --- İşlemci: "12th Gen Intel(R) Core(TM) i7-12700 (2.10 GHz)" ---
+    cpu_name = inv.get("cpu_name") or inv.get("processor") or ""
+    cpu_clock_mhz = inv.get("cpu_clock_mhz", 0)
+    if cpu_name:
+        if cpu_clock_mhz and cpu_clock_mhz > 0:
+            ghz = cpu_clock_mhz / 1000.0
+            out["İşlemci"] = f"{cpu_name} ({_fmt_tr_float(ghz, 2)} GHz)"
+        else:
+            out["İşlemci"] = cpu_name
+    
+    # --- Takılı RAM: "32,0 GB (kullanılabilir: 31,7 GB)" ---
+    ram_total = inv.get("ram_total", 0)
+    ram_available = inv.get("ram_available", 0)
+    if ram_total:
+        try:
+            total_gb = int(ram_total) / (1024**3)
+            avail_gb = int(ram_available) / (1024**3)
+            out["Takılı RAM"] = f"{_fmt_tr_float(total_gb, 1)} GB (kullanılabilir: {_fmt_tr_float(avail_gb, 1)} GB)"
+        except:
+            pass
+
+    # Marka, Model, Seri No (csproduct)
+    system_vendor = inv.get("system_vendor") or ""
+    system_model = inv.get("system_model") or ""
+    system_serial = inv.get("system_serial") or ""
+    if system_vendor.strip():
+        out["Marka"] = system_vendor.strip()
+    if system_model.strip():
+        out["Model"] = system_model.strip()
+    if system_serial.strip():
+        out["Seri No"] = system_serial.strip()
+
+    # CPU Sıcaklığı
+    cpu_temp = inv.get("cpu_temp", 0)
+    try:
+        cpu_temp_val = float(cpu_temp)
+        if cpu_temp_val > 0:
+            out["CPU Sıcaklığı"] = f"{_fmt_tr_float(cpu_temp_val, 1)} °C"
+    except:
+        pass
 
     # Copy known keys in a stable order.
     for k in ordered_keys:
         if k in inv:
             out[k] = inv.get(k)
 
-    # Append any remaining keys (rare/new fields).
-    for k, v in inv.items():
-        if k not in out:
-            out[k] = v
+    # Bilgisayar Adı
+    hostname = inv.get("hostname") or ""
+    if hostname:
+        out["Bilgisayar Adı"] = hostname
 
-    # Pretty conversions
-    ts = out.get("ts")
+    # İşletim Sistemi
+    platform_str = inv.get("platform") or ""
+    if platform_str:
+        out["İşletim Sistemi"] = platform_str
+
+    # Saat (pretty formatted)
+    ts = inv.get("ts")
     if isinstance(ts, str):
         pretty = _try_pretty_tr_datetime_from_iso(ts)
         if pretty:
-            out["ts"] = pretty
+            out["Saat"] = pretty
+        else:
+            out["Saat"] = ts
 
     for k in ("ram_total", "ram_available"):
         if k in out:
@@ -1058,12 +1113,37 @@ def _format_inventory_for_ui(inv: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
 
+    # Software: format as a readable list
+    software = inv.get("software")
+    if isinstance(software, dict) and software:
+        # Map internal keys to Turkish display names
+        sw_labels = {
+            "office": "Microsoft Office",
+            "radmin": "Radmin",
+            "rustdesk": "RustDesk",
+            "photoshop": "Photoshop",
+            "autocad": "AutoCAD",
+            "sql_server": "SQL Server",
+            "eset": "ESET",
+        }
+        sw_items = []
+        for key in ["office", "radmin", "rustdesk", "photoshop", "autocad", "sql_server", "eset"]:
+            if key in software:
+                sw_items.append(software[key])
+        if sw_items:
+            out["software"] = sw_items
+        else:
+            # Remove empty software from output
+            out.pop("software", None)
+    elif "software" in out and not out.get("software"):
+        out.pop("software", None)
+
     return out
 
 
 def _get_latest_release(platform: str) -> dict[str, Any] | None:
     plat = (platform or "").strip().lower()
-    if plat not in {"windows"}:
+    if plat not in {"windows", "windows7", "windows7-32", "windows-32"}:
         return None
 
     base = _agent_releases_dir() / plat
@@ -1105,7 +1185,7 @@ def _get_latest_release(platform: str) -> dict[str, Any] | None:
 def _get_release_by_version(platform: str, version: str) -> dict[str, Any] | None:
     plat = (platform or "").strip().lower()
     ver = (version or "").strip()
-    if plat not in {"windows"}:
+    if plat not in {"windows", "windows7", "windows7-32", "windows-32"}:
         return None
     if not ver:
         return None
@@ -2236,7 +2316,7 @@ def agent_download_release(request: Request, platform: str, version: str, db=Dep
     require_agent_token(request, db)
     plat = (platform or "").strip().lower()
     ver = (version or "").strip()
-    if plat not in {"windows"}:
+    if plat not in {"windows", "windows7", "windows7-32", "windows-32"}:
         raise HTTPException(status_code=400, detail="invalid platform")
     if not ver:
         raise HTTPException(status_code=400, detail="version required")
@@ -2263,7 +2343,7 @@ def agent_download_release_enroll(platform: str, version: str, enrollment_token:
     require_enrollment_token(enrollment_token, db)
     plat = (platform or "").strip().lower()
     ver = (version or "").strip()
-    if plat not in {"windows"}:
+    if plat not in {"windows", "windows7", "windows7-32", "windows-32"}:
         raise HTTPException(status_code=400, detail="invalid platform")
     if not ver:
         raise HTTPException(status_code=400, detail="version required")

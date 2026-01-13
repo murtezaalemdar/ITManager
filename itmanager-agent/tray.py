@@ -15,7 +15,7 @@ import hmac
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import requests
 
@@ -247,8 +247,9 @@ def _read_json(path: Path):
 def _programdata_dir() -> Path:
     try:
         import os
-
-        pd = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+        # PROGRAMDATA = C:\ProgramData (Vista+)
+        # ALLUSERSPROFILE = C:\ProgramData (Vista+) veya C:\Documents and Settings\All Users (XP)
+        pd = os.environ.get("PROGRAMDATA") or os.environ.get("ALLUSERSPROFILE") or r"C:\ProgramData"
         return Path(pd) / "ITManagerAgent"
     except Exception:
         return Path(r"C:\ProgramData\ITManagerAgent")
@@ -427,12 +428,15 @@ def _run_sc_elevated(args: list[str]) -> Tuple[int, str]:
 
     try:
         # Build inner (elevated) script and pass via -EncodedCommand (UTF-16LE base64).
-        arg_list = ",".join([f"'{a.replace("'", "''")}'" for a in args])
+        def _esc(s):
+            return "'" + s.replace("'", "''") + "'"
+        arg_list = ",".join([_esc(a) for a in args])
+        out_esc = str(out_file).replace("'", "''")
         inner = (
             "$ErrorActionPreference='Stop'\n"
-            f"$out='{str(out_file).replace("'", "''")}'\n"
+            "$out='" + out_esc + "'\n"
             "try {\n"
-            f"  & sc.exe @({arg_list}) *>&1 | Out-File -FilePath $out -Encoding utf8\n"
+            "  & sc.exe @(" + arg_list + ") *>&1 | Out-File -FilePath $out -Encoding utf8\n"
             "  exit $LASTEXITCODE\n"
             "} catch {\n"
             "  ($_ | Out-String) | Out-File -FilePath $out -Encoding utf8\n"
@@ -501,12 +505,15 @@ def _run_exe_elevated(exe_path: Path, exe_args: list[str]) -> Tuple[int, str]:
     try:
         exe_str = str(exe_path)
         exe_str = exe_str.replace("'", "''")
-        arg_list = ",".join([f"'{a.replace("'", "''")}'" for a in exe_args])
+        def _esc(s):
+            return "'" + s.replace("'", "''") + "'"
+        arg_list = ",".join([_esc(a) for a in exe_args])
+        out_esc = str(out_file).replace("'", "''")
         inner = (
             "$ErrorActionPreference='Stop'\n"
-            f"$out='{str(out_file).replace("'", "''")}'\n"
+            "$out='" + out_esc + "'\n"
             "try {\n"
-            f"  & '{exe_str}' @({arg_list}) *>&1 | Out-File -FilePath $out -Encoding utf8\n"
+            "  & '" + exe_str + "' @(" + arg_list + ") *>&1 | Out-File -FilePath $out -Encoding utf8\n"
             "  exit $LASTEXITCODE\n"
             "} catch {\n"
             "  ($_ | Out-String) | Out-File -FilePath $out -Encoding utf8\n"
@@ -553,7 +560,7 @@ def _run_exe_elevated(exe_path: Path, exe_args: list[str]) -> Tuple[int, str]:
             pass
 
 
-def _run_ps_file_elevated(script_path: Path, script_args: list[str] | None = None) -> Tuple[int, str]:
+def _run_ps_file_elevated(script_path: Path, script_args: Optional[List[str]] = None) -> Tuple[int, str]:
     """Run a PowerShell script elevated (UAC) and capture its output."""
     run_id = uuid.uuid4().hex
     out_file = Path(tempfile.gettempdir()) / f"itmanager_ps_{run_id}.out.txt"
@@ -561,12 +568,15 @@ def _run_ps_file_elevated(script_path: Path, script_args: list[str] | None = Non
 
     try:
         sp = str(script_path).replace("'", "''")
-        arg_list = ",".join([f"'{a.replace("'", "''")}'" for a in script_args])
+        def _esc(s):
+            return "'" + s.replace("'", "''") + "'"
+        arg_list = ",".join([_esc(a) for a in script_args])
+        out_esc = str(out_file).replace("'", "''")
         inner = (
             "$ErrorActionPreference='Stop'\n"
-            f"$out='{str(out_file).replace("'", "''")}'\n"
+            "$out='" + out_esc + "'\n"
             "try {\n"
-            f"  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '{sp}' @({arg_list}) *>&1 | Out-File -FilePath $out -Encoding utf8\n"
+            "  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '" + sp + "' @(" + arg_list + ") *>&1 | Out-File -FilePath $out -Encoding utf8\n"
             "  exit $LASTEXITCODE\n"
             "} catch {\n"
             "  ($_ | Out-String) | Out-File -FilePath $out -Encoding utf8\n"

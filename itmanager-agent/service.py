@@ -22,7 +22,7 @@ def _runtime_dir() -> Path:
 
 
 def _programdata_config_path() -> Path:
-    program_data = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+    program_data = os.environ.get("PROGRAMDATA") or os.environ.get("ALLUSERSPROFILE") or r"C:\ProgramData"
     return Path(program_data) / "ITManagerAgent" / "config.json"
 
 

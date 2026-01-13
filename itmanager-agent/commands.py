@@ -9,7 +9,7 @@ import hmac
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 def _wts_send_message_to_sessions(title: str, message: str, timeout: int = 15) -> Tuple[int, str, str]:
@@ -91,7 +91,7 @@ def _wts_send_message_to_sessions(title: str, message: str, timeout: int = 15) -
     p_sessions = ctypes.POINTER(WTS_SESSION_INFO)()
     count = wintypes.DWORD(0)
     ok_enum = WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, ctypes.byref(p_sessions), ctypes.byref(count))
-    session_ids: list[int] = []
+    session_ids: List[int] = []
     try:
         if ok_enum and count.value:
             for i in range(int(count.value)):
@@ -200,7 +200,7 @@ def _decrypt_secret_payload(payload: Dict[str, Any]) -> str:
     return pt.decode("utf-8")
 
 
-def get_supported_command_types() -> list[str]:
+def get_supported_command_types() -> List[str]:
     """Return a stable list of command types supported by this agent build."""
     # Keep this list in sync with execute_command() and agent-side special handlers.
     return sorted(
@@ -255,7 +255,7 @@ def _is_safe_net_user_value(s: str) -> bool:
     return True
 
 
-def _run_net_user(args: list[str], timeout: int = 60) -> Tuple[int, str, str]:
+def _run_net_user(args: List[str], timeout: int = 60) -> Tuple[int, str, str]:
     try:
         completed = subprocess.run(
             ["net", "user", *args],
@@ -273,7 +273,7 @@ def _run_net_user(args: list[str], timeout: int = 60) -> Tuple[int, str, str]:
         return 1, "", str(e)
 
 
-def _run_net_localgroup(args: list[str], timeout: int = 60) -> Tuple[int, str, str]:
+def _run_net_localgroup(args: List[str], timeout: int = 60) -> Tuple[int, str, str]:
     try:
         completed = subprocess.run(
             ["net", "localgroup", *args],
@@ -403,15 +403,384 @@ def _parse_iso_or_date_time(payload: Dict[str, Any]) -> Tuple[int, str, str]:
         return 2, "", f"invalid datetime format: {iso}"
 
 
+def _get_installed_software() -> Dict[str, Any]:
+    """Detect specific installed software from Windows registry."""
+    software: Dict[str, Any] = {}
+    
+    # Registry paths for installed programs (both 32-bit and 64-bit)
+    reg_paths = [
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    ]
+    
+    try:
+        import winreg
+        
+        all_programs = []
+        for reg_path in reg_paths:
+            for hive in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
+                try:
+                    key = winreg.OpenKey(hive, reg_path)
+                    for i in range(winreg.QueryInfoKey(key)[0]):
+                        try:
+                            subkey_name = winreg.EnumKey(key, i)
+                            subkey = winreg.OpenKey(key, subkey_name)
+                            try:
+                                name = winreg.QueryValueEx(subkey, "DisplayName")[0]
+                                version = ""
+                                try:
+                                    version = winreg.QueryValueEx(subkey, "DisplayVersion")[0]
+                                except Exception:
+                                    pass
+                                all_programs.append({"name": name, "version": version})
+                            except Exception:
+                                pass
+                            winreg.CloseKey(subkey)
+                        except Exception:
+                            pass
+                    winreg.CloseKey(key)
+                except Exception:
+                    pass
+        
+        # Detect Microsoft Office
+        office_patterns = [
+            ("Microsoft Office Professional", "Office Pro"),
+            ("Microsoft Office Standard", "Office Std"),
+            ("Microsoft Office Home", "Office Home"),
+            ("Microsoft 365", "Microsoft 365"),
+            ("Microsoft Office 365", "Office 365"),
+            ("Microsoft Office", "Office"),
+        ]
+        for prog in all_programs:
+            name = prog.get("name", "")
+            for pattern, label in office_patterns:
+                if pattern.lower() in name.lower():
+                    # Extract year/version from name
+                    import re
+                    year_match = re.search(r'(20\d{2})', name)
+                    year = year_match.group(1) if year_match else ""
+                    edition = ""
+                    if "professional plus" in name.lower():
+                        edition = "Pro Plus"
+                    elif "professional" in name.lower():
+                        edition = "Pro"
+                    elif "standard" in name.lower():
+                        edition = "Std"
+                    elif "home" in name.lower() and "business" in name.lower():
+                        edition = "Home & Business"
+                    elif "home" in name.lower() and "student" in name.lower():
+                        edition = "Home & Student"
+                    elif "home" in name.lower():
+                        edition = "Home"
+                    
+                    if "365" in name:
+                        software["office"] = f"Microsoft 365 {edition}".strip()
+                    elif year:
+                        software["office"] = f"Office {year} {edition}".strip()
+                    else:
+                        software["office"] = f"{label} {prog.get('version', '')}".strip()
+                    break
+            if "office" in software:
+                break
+        
+        # Detect Radmin Server
+        for prog in all_programs:
+            name = prog.get("name", "")
+            if "radmin" in name.lower() and "server" in name.lower():
+                software["radmin"] = f"Radmin Server {prog.get('version', '')}".strip()
+                break
+        
+        # Detect RustDesk
+        for prog in all_programs:
+            name = prog.get("name", "")
+            if "rustdesk" in name.lower():
+                software["rustdesk"] = f"RustDesk {prog.get('version', '')}".strip()
+                break
+        
+        # Detect Adobe Photoshop
+        for prog in all_programs:
+            name = prog.get("name", "")
+            if "photoshop" in name.lower() and "adobe" in name.lower():
+                # Extract version like CC 2024, CS6, etc.
+                import re
+                ver_match = re.search(r'(CC\s*\d{4}|CS\d+|\d{4})', name, re.I)
+                ver = ver_match.group(1) if ver_match else prog.get('version', '')
+                software["photoshop"] = f"Photoshop {ver}".strip()
+                break
+        
+        # Detect AutoCAD
+        for prog in all_programs:
+            name = prog.get("name", "")
+            if "autocad" in name.lower():
+                import re
+                year_match = re.search(r'(20\d{2})', name)
+                year = year_match.group(1) if year_match else prog.get('version', '')
+                software["autocad"] = f"AutoCAD {year}".strip()
+                break
+        
+        # Detect SQL Server
+        for prog in all_programs:
+            name = prog.get("name", "")
+            if "sql server" in name.lower() and "microsoft" in name.lower():
+                import re
+                year_match = re.search(r'(20\d{2})', name)
+                year = year_match.group(1) if year_match else ""
+                edition = ""
+                if "express" in name.lower():
+                    edition = "Express"
+                elif "standard" in name.lower():
+                    edition = "Std"
+                elif "enterprise" in name.lower():
+                    edition = "Enterprise"
+                elif "developer" in name.lower():
+                    edition = "Developer"
+                software["sql_server"] = f"SQL Server {year} {edition}".strip()
+                break
+        
+        # Detect ESET (Antivirus, Endpoint Security, NOD32, etc.)
+        for prog in all_programs:
+            name = prog.get("name", "")
+            if "eset" in name.lower():
+                version = prog.get("version", "")
+                # Clean up the name for display
+                if "endpoint security" in name.lower():
+                    software["eset"] = f"ESET Endpoint Security {version}".strip()
+                elif "nod32" in name.lower():
+                    software["eset"] = f"ESET NOD32 {version}".strip()
+                elif "smart security" in name.lower():
+                    software["eset"] = f"ESET Smart Security {version}".strip()
+                elif "internet security" in name.lower():
+                    software["eset"] = f"ESET Internet Security {version}".strip()
+                else:
+                    software["eset"] = f"ESET {version}".strip()
+                break
+                
+    except Exception:
+        pass
+    
+    return software
+
+
+def _get_cpu_info() -> Dict[str, Any]:
+    """
+    Windows'tan detaylı CPU bilgisi al (WMI veya Registry).
+    Returns: {"name": "...", "max_clock_mhz": 3400, "cores": 8, "threads": 16}
+    """
+    import platform
+    cpu_info: Dict[str, Any] = {
+        "name": platform.processor(),
+        "max_clock_mhz": 0,
+        "cores": 0,
+        "threads": 0
+    }
+    
+    if platform.system() != "Windows":
+        return cpu_info
+    
+    try:
+        import winreg
+        # Registry'den CPU bilgisi al
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+        )
+        try:
+            name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            cpu_info["name"] = name.strip()
+        except:
+            pass
+        try:
+            mhz, _ = winreg.QueryValueEx(key, "~MHz")
+            cpu_info["max_clock_mhz"] = int(mhz)
+        except:
+            pass
+        winreg.CloseKey(key)
+    except Exception:
+        pass
+    
+    # Core/Thread sayısı psutil'den
+    try:
+        import psutil
+        cpu_info["cores"] = psutil.cpu_count(logical=False) or 0
+        cpu_info["threads"] = psutil.cpu_count(logical=True) or 0
+    except:
+        pass
+    
+    return cpu_info
+
+
+def _get_system_info() -> Dict[str, Any]:
+    """wmic csproduct ile Marka, Model, Seri No bilgisi al."""
+    result: Dict[str, Any] = {
+        "vendor": "",
+        "model": "",
+        "serial": ""
+    }
+    
+    if os.name != "nt":
+        return result
+    
+    # wmic csproduct get name, vendor, identifyingnumber
+    try:
+        completed = subprocess.run(
+            ["wmic", "csproduct", "get", "name,vendor,identifyingnumber", "/format:csv"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if completed.returncode == 0:
+            lines = [l.strip() for l in (completed.stdout or "").splitlines() if l.strip()]
+            # CSV format: Node,IdentifyingNumber,Name,Vendor
+            for line in lines:
+                if line.lower().startswith("node,") or not line:
+                    continue
+                parts = line.split(",")
+                if len(parts) >= 4:
+                    result["serial"] = parts[1].strip()
+                    result["model"] = parts[2].strip()
+                    result["vendor"] = parts[3].strip()
+                    break
+    except Exception:
+        pass
+    
+    # Fallback: PowerShell
+    if not result["vendor"] and not result["model"]:
+        try:
+            ps_cmd = [
+                "powershell", "-NoProfile", "-Command",
+                "Get-CimInstance Win32_ComputerSystemProduct | Select-Object -Property Vendor,Name,IdentifyingNumber | ConvertTo-Json"
+            ]
+            completed = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=15)
+            if completed.returncode == 0:
+                import json
+                data = json.loads(completed.stdout.strip())
+                result["vendor"] = data.get("Vendor", "") or ""
+                result["model"] = data.get("Name", "") or ""
+                result["serial"] = data.get("IdentifyingNumber", "") or ""
+        except Exception:
+            pass
+    
+    return result
+
+
+def _get_cpu_temperature() -> float:
+    """CPU sıcaklığını derece cinsinden döndür (bulunamazsa 0)."""
+    if os.name != "nt":
+        return 0.0
+    
+    # Method 1: WMI MSAcpi_ThermalZoneTemperature (requires admin, not always available)
+    try:
+        ps_cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "(Get-CimInstance -Namespace root/WMI -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | Select-Object -First 1).CurrentTemperature"
+        ]
+        completed = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=10)
+        if completed.returncode == 0:
+            temp_str = (completed.stdout or "").strip()
+            if temp_str and temp_str.isdigit():
+                # WMI returns temperature in tenths of Kelvin
+                kelvin_tenths = int(temp_str)
+                celsius = (kelvin_tenths / 10.0) - 273.15
+                if 0 < celsius < 120:  # sanity check
+                    return round(celsius, 1)
+    except Exception:
+        pass
+    
+    # Method 2: Open Hardware Monitor / LibreHardwareMonitor WMI (if installed)
+    try:
+        ps_cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "(Get-CimInstance -Namespace root/OpenHardwareMonitor -ClassName Sensor -ErrorAction SilentlyContinue | Where-Object {$_.SensorType -eq 'Temperature' -and $_.Name -like '*CPU*'} | Select-Object -First 1).Value"
+        ]
+        completed = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=10)
+        if completed.returncode == 0:
+            temp_str = (completed.stdout or "").strip()
+            if temp_str:
+                try:
+                    celsius = float(temp_str)
+                    if 0 < celsius < 120:
+                        return round(celsius, 1)
+                except:
+                    pass
+    except Exception:
+        pass
+    
+    return 0.0
+
+
+def _get_bios_serial() -> str:
+    """Kasa/BIOS seri numarasını döndürür (Windows)."""
+    if os.name != "nt":
+        return ""
+
+    # 1) Öncelikle WMIC ile dene (kullanıcının verdiği komut)
+    try:
+        completed = subprocess.run(
+            ["wmic", "bios", "get", "serialnumber"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if completed.returncode == 0:
+            output = (completed.stdout or "") + "\n" + (completed.stderr or "")
+            for line in output.splitlines():
+                s = (line or "").strip()
+                if not s:
+                    continue
+                if s.lower().startswith("serialnumber"):
+                    continue
+                return s
+    except Exception:
+        pass
+
+    # 2) WMIC yoksa PowerShell CIM/WMI ile dene
+    try:
+        ps_cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Try { (Get-CimInstance Win32_BIOS | Select-Object -ExpandProperty SerialNumber) } Catch { (Get-WmiObject Win32_BIOS).SerialNumber }",
+        ]
+        completed = subprocess.run(
+            ps_cmd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if completed.returncode == 0:
+            s = (completed.stdout or "").strip()
+            if s:
+                return s
+    except Exception:
+        pass
+
+    return ""
+
+
 def _inventory() -> Dict[str, Any]:
     import platform
 
+    # Get detailed CPU info
+    cpu_info = _get_cpu_info()
+    bios_serial = _get_bios_serial()
+    system_info = _get_system_info()
+    cpu_temp = _get_cpu_temperature()
+    
     info: Dict[str, Any] = {
         "ts": datetime.utcnow().isoformat(),
         "hostname": platform.node(),
         "platform": platform.platform(),
         "machine": platform.machine(),
         "processor": platform.processor(),
+        "cpu_name": cpu_info.get("name", ""),
+        "cpu_clock_mhz": cpu_info.get("max_clock_mhz", 0),
+        "cpu_cores": cpu_info.get("cores", 0),
+        "cpu_threads": cpu_info.get("threads", 0),
+        "cpu_temp": cpu_temp,
+        "bios_serial": bios_serial,
+        "system_vendor": system_info.get("vendor", ""),
+        "system_model": system_info.get("model", ""),
+        "system_serial": system_info.get("serial", ""),
         "python": platform.python_version(),
     }
 

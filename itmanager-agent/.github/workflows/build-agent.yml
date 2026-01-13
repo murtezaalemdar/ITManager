@@ -1,0 +1,158 @@
+name: Build ITManager Agent
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 0.2.63)'
+        required: true
+        default: '0.2.63'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Windows 10/11 64-bit
+          - os: windows-latest
+            python-version: '3.13'
+            architecture: x64
+            platform: windows
+            
+          # Windows 10/11 32-bit
+          - os: windows-latest
+            python-version: '3.13'
+            architecture: x86
+            platform: windows-32
+            
+          # Windows 7 64-bit (Python 3.7)
+          - os: windows-latest
+            python-version: '3.7'
+            architecture: x64
+            platform: windows7
+            
+          # Windows 7 32-bit (Python 3.7)
+          - os: windows-latest
+            python-version: '3.7'
+            architecture: x86
+            platform: windows7-32
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }} (${{ matrix.architecture }})
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.architecture }}
+
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event.inputs.version }}") {
+            $ver = "${{ github.event.inputs.version }}"
+          } elseif ("${{ github.ref_name }}".StartsWith("v")) {
+            $ver = "${{ github.ref_name }}".Substring(1)
+          } else {
+            $ver = "0.0.0"
+          }
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          
+          # Update version.py
+          Set-Content -Path "version.py" -Value "__version__ = `"$ver`""
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller requests psutil pywin32 pystray Pillow cryptography
+
+      - name: Build executables
+        shell: pwsh
+        run: |
+          $platform = "${{ matrix.platform }}"
+          $version = "${{ steps.version.outputs.VERSION }}"
+          
+          # Common args
+          $common = @(
+            "--noconfirm",
+            "--onefile",
+            "--hidden-import", "agent",
+            "--hidden-import", "commands",
+            "--hidden-import", "version"
+          )
+          
+          # Build Service
+          python -m PyInstaller @common `
+            --name "ITManagerAgentService" `
+            --hidden-import "servicemanager" `
+            --hidden-import "win32serviceutil" `
+            --hidden-import "win32service" `
+            --hidden-import "win32event" `
+            --hidden-import "win32api" `
+            service.py
+          
+          # Build Tray
+          python -m PyInstaller @common `
+            --name "ITManagerAgentTray" `
+            --windowed `
+            --hidden-import "pystray" `
+            --hidden-import "PIL" `
+            tray.py
+          
+          # Build Agent
+          python -m PyInstaller @common `
+            --name "ITManagerAgent" `
+            agent.py
+          
+          # Create release folder
+          $outDir = "release-$platform"
+          New-Item -ItemType Directory -Path $outDir -Force
+          
+          Copy-Item "dist\ITManagerAgentService.exe" $outDir
+          Copy-Item "dist\ITManagerAgentTray.exe" $outDir
+          Copy-Item "dist\ITManagerAgent.exe" $outDir
+          Copy-Item "config.example.json" $outDir
+          Copy-Item "setup.ps1" $outDir -ErrorAction SilentlyContinue
+          Copy-Item "Setup.cmd" $outDir -ErrorAction SilentlyContinue
+          Copy-Item "install_service_admin.ps1" $outDir -ErrorAction SilentlyContinue
+          Copy-Item "install_tray_startup.ps1" $outDir -ErrorAction SilentlyContinue
+          
+          # Create ZIP
+          $zipName = "itmanager-agent-$platform-$version.zip"
+          Compress-Archive -Path "$outDir\*" -DestinationPath $zipName -Force
+          
+          # SHA256
+          $hash = (Get-FileHash $zipName -Algorithm SHA256).Hash
+          Set-Content -Path "$zipName.sha256" -Value $hash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: itmanager-agent-${{ matrix.platform }}-${{ steps.version.outputs.VERSION }}
+          path: |
+            itmanager-agent-${{ matrix.platform }}-*.zip
+            itmanager-agent-${{ matrix.platform }}-*.zip.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*.zip*
+          generate_release_notes: true

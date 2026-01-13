@@ -4,7 +4,9 @@ param(
   [string]$TrayName = "ITManagerAgentTray",
   [string]$AgentName = "ITManagerAgent",
   [switch]$AutoVersion,
-  [string]$SetVersion = ""
+  [string]$SetVersion = "",
+  [string]$PyVersion = "3.13",    # Windows 10/11 için 3.13, Win7 için 3.7 kullan
+  [string]$Platform = "windows"   # "windows" veya "windows7"
 )
 
 Set-StrictMode -Version Latest
@@ -13,10 +15,15 @@ $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $here
 
-$venvDir = Join-Path $here ".venv-build"
+$venvDir = Join-Path $here ".venv-build-$Platform"
 if (-not (Test-Path $venvDir)) {
-  Write-Host "[+] Build venv oluşturuluyor: $venvDir"
-  py -3.13 -m venv $venvDir
+  Write-Host "[+] Build venv oluşturuluyor ($Platform, Python $PyVersion): $venvDir"
+  $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+  if ($pyLauncher) {
+    py -$PyVersion -m venv $venvDir
+  } else {
+    throw "Python launcher 'py' bulunamadı. Win7/Win10 için Python'u 'py launcher' ile kurun veya py'yi PATH'e ekleyin."
+  }
 }
 
 $py = Join-Path $venvDir "Scripts\python.exe"
@@ -81,20 +88,44 @@ if ($SetVersion) {
   Set-AgentVersion $nextVersion
   $currentVersion = Get-AgentVersion
 } else {
-  # Default behavior: always bump patch unless user explicitly set a version.
+  # Default behavior:
+  # - windows: bump patch
+  # - non-windows (e.g. windows7): keep the same version unless explicitly requested
   if ($currentVersion -eq 'unknown') {
-    throw "version.py okunamadı; otomatik sürüm artırma uygulanamadı"
+    throw "version.py okunamadı"
   }
-  $nextVersion = Bump-Patch $currentVersion
-  Write-Host "[+] AutoVersion (default): $currentVersion -> $nextVersion" -ForegroundColor Cyan
-  Set-AgentVersion $nextVersion
-  $currentVersion = Get-AgentVersion
+  if ($Platform -eq 'windows') {
+    $nextVersion = Bump-Patch $currentVersion
+    Write-Host "[+] AutoVersion (default): $currentVersion -> $nextVersion" -ForegroundColor Cyan
+    Set-AgentVersion $nextVersion
+    $currentVersion = Get-AgentVersion
+  } else {
+    Write-Host "[i] Platform '$Platform' için default sürüm artırma kapalı; sürüm korunuyor: $currentVersion" -ForegroundColor DarkGray
+  }
 }
 
 Write-Host "[+] Paketler kuruluyor (agent requirements + pyinstaller)..."
-& $py -m pip install --upgrade pip
-& $py -m pip install -r .\requirements.txt
-& $py -m pip install pyinstaller
+try {
+  $pyVer = (& $py -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" | Select-Object -First 1).Trim()
+} catch {
+  $pyVer = ""
+}
+
+# Win7 SSL/TLS sorunları için trusted-host ekle
+$pipTrust = @("--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org")
+
+# Python 3.7: pip>=23.2 and PyInstaller>=6 drop support.
+if ($pyVer -eq '3.7') {
+  & $py -m pip install @pipTrust --upgrade "pip==23.1.2"
+} else {
+  & $py -m pip install @pipTrust --upgrade pip
+}
+& $py -m pip install @pipTrust -r .\requirements.txt
+if ($pyVer -eq '3.7') {
+  & $py -m pip install @pipTrust "pyinstaller==5.13.2"
+} else {
+  & $py -m pip install @pipTrust pyinstaller
+}
 
 $pyiWork = Join-Path $here "build-work"
 $pyiDist = Join-Path $here "build-dist"
@@ -203,7 +234,7 @@ try {
 }
 
 if ($version -and $version -ne "unknown") {
-  $zipName = "itmanager-agent-windows-$version.zip"
+  $zipName = "itmanager-agent-$Platform-$version.zip"
   $zipPath = Join-Path $here $zipName
   if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
   Write-Host "[+] Release ZIP oluşturuluyor: $zipName"
@@ -223,7 +254,7 @@ if ($version -and $version -ne "unknown") {
   Set-Content -Path ("$zipPath.sha256") -Value $hash -Encoding ascii
   Write-Host "[OK] ZIP: $zipPath"
   Write-Host "[OK] SHA256: $hash"
-  Write-Host "Sunucuya kopyala: itmanager-server\\agent-releases\\windows\\$zipName"
+  Write-Host "Sunucuya kopyala: itmanager-server\\agent-releases\\$Platform\\$zipName"
 } else {
   Write-Host "[!] Sürüm okunamadı; ZIP üretilmedi. version.py kontrol et."
 }

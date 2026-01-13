@@ -151,9 +151,23 @@ if (-not $NoStart) {
     Write-Host "[ERROR] Servis doğrulama/başlatma başarısız: $($_)" -ForegroundColor Red
     exit 1
   }
+
+  # Tray'i hemen başlat (kullanıcı oturumu varsa sağ alt köşede ikon görünsün)
+  if ($doTray) {
+    $trayExe = Join-Path $pd 'ITManagerAgentTray.exe'
+    if (Test-Path -LiteralPath $trayExe) {
+      Write-Host "[INFO] Tray başlatılıyor: $trayExe" -ForegroundColor Cyan
+      try {
+        Start-Process -FilePath $trayExe -WindowStyle Hidden
+      } catch {
+        Write-Host "[WARN] Tray başlatılamadı: $($_)" -ForegroundColor Yellow
+      }
+    }
+  }
 }
 
 Write-Host "[OK] Kurulum/Update tamamlandı." -ForegroundColor Green
 Write-Host "- Dosyalar: $pd" 
 Write-Host "- Servis: ITManagerAgent (auto/delayed-auto)" 
-Write-Host "- Tray: Startup'a eklendi (login sonrası açılır)" 
+Write-Host "- Tray: Startup'a eklendi (login sonrası açılır)"
+Write-Host "- Tray şu anda çalışıyor (sağ alt köşede ikon kontrol edin)" 
