@@ -5,7 +5,6 @@ import threading
 import traceback
 import os
 from datetime import datetime
-from typing import Optional
 import servicemanager
 import win32event
 import win32service
@@ -71,18 +70,6 @@ def _msgbox(title: str, text: str) -> None:
         pass
 
 
-class StopFlag:
-    """Thread-safe stop flag for graceful shutdown."""
-    def __init__(self) -> None:
-        self._evt = threading.Event()
-
-    def set(self) -> None:
-        self._evt.set()
-
-    def is_set(self) -> bool:
-        return self._evt.is_set()
-
-
 class ITManagerAgentService(win32serviceutil.ServiceFramework):
     _svc_name_ = "ITManagerAgent"
     _svc_display_name_ = "ITManager Agent"
@@ -93,8 +80,8 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
         _boot_log("__init__")
         self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self._stop_flag = StopFlag()
-        self._worker: Optional[threading.Thread] = None
-        self._worker_exc: Optional[str] = None
+        self._worker: threading.Thread | None = None
+        self._worker_exc: str | None = None
 
     def _run_agent_worker(self) -> None:
         try:
@@ -129,6 +116,17 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
                 win32event.SetEvent(self.hWaitStop)
             except Exception:
                 pass
+
+
+class StopFlag:
+    def __init__(self) -> None:
+        self._evt = threading.Event()
+
+    def set(self) -> None:
+        self._evt.set()
+
+    def is_set(self) -> bool:
+        return self._evt.is_set()
 
     def SvcStop(self):
         _boot_log("SvcStop")

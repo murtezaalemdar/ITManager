@@ -334,7 +334,7 @@ class ITManagerAgent:
                 raise RuntimeError(f"sha256 mismatch expected={exp} actual={actual}")
         return out_path
 
-    def _rustdesk_deploy(self) -> Tuple[int, str, str]:
+    def _rustdesk_deploy(self) -> tuple[int, str, str]:
         if not self._token:
             return 2, "", "not enrolled"
 
@@ -406,7 +406,7 @@ class ITManagerAgent:
                         continue
                 return None
 
-            def _apply_rustdesk_config(rustdesk_exe: Path) -> Tuple[Optional[str], str]:
+            def _apply_rustdesk_config(rustdesk_exe: Path) -> tuple[Optional[str], str]:
                 # Apply config string and optionally set permanent password.
                 # IMPORTANT: do not return the password to avoid storing plaintext in server DB.
                 err_msgs: List[str] = []
