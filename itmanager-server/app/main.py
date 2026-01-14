@@ -792,11 +792,17 @@ try {{
     $wc = New-Object System.Net.WebClient
     $wc.Headers['Accept'] = 'application/json'
 
-    # Windows 7 / Server 2008 R2 veya öncesi için windows7 platformu kullan
+    # Platform algılama: windows / windows-32 / windows7 / windows7-32
     $plat = 'windows'
     try {{
         $osv = [Environment]::OSVersion.Version
-        if ($osv.Major -lt 6 -or ($osv.Major -eq 6 -and $osv.Minor -le 1)) {{ $plat = 'windows7' }}
+        $is32bit = [IntPtr]::Size -eq 4
+        $isWin7OrOlder = ($osv.Major -lt 6) -or (($osv.Major -eq 6) -and ($osv.Minor -le 1))
+        if ($isWin7OrOlder) {{
+            $plat = if ($is32bit) {{ 'windows7-32' }} else {{ 'windows7' }}
+        }} else {{
+            $plat = if ($is32bit) {{ 'windows-32' }} else {{ 'windows' }}
+        }}
     }} catch {{ }}
     Log ('platform=' + $plat)
 
