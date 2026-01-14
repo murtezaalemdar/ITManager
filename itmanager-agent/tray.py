@@ -330,7 +330,7 @@ def _ensure_programdata_config() -> Path:
     return pd_cfg
 
 
-def _run_sc(args: list[str]) -> Tuple[int, str]:
+def _run_sc(args: List[str]) -> Tuple[int, str]:
     try:
         run_kwargs = {
             "capture_output": True,
@@ -418,7 +418,7 @@ def _self_path() -> str:
         return "-"
 
 
-def _run_sc_elevated(args: list[str]) -> Tuple[int, str]:
+def _run_sc_elevated(args: List[str]) -> Tuple[int, str]:
     # Triggers a UAC prompt.
     # NOTE: On Windows PowerShell 5.1, Start-Process -Verb RunAs cannot be combined with
     # RedirectStandardOutput/RedirectStandardError (different parameter set). We instead
@@ -484,7 +484,7 @@ def _run_sc_elevated(args: list[str]) -> Tuple[int, str]:
             pass
 
 
-def _run_sc_maybe_elevated(args: list[str]) -> Tuple[int, str]:
+def _run_sc_maybe_elevated(args: List[str]) -> Tuple[int, str]:
     code, out = _run_sc(args)
     if code != 0 and _is_access_denied(out):
         code2, out2 = _run_sc_elevated(args)
@@ -498,7 +498,7 @@ def _run_sc_maybe_elevated(args: list[str]) -> Tuple[int, str]:
     return code, out
 
 
-def _run_exe_elevated(exe_path: Path, exe_args: list[str]) -> Tuple[int, str]:
+def _run_exe_elevated(exe_path: Path, exe_args: List[str]) -> Tuple[int, str]:
     run_id = uuid.uuid4().hex
     out_file = Path(tempfile.gettempdir()) / f"itmanager_exe_{run_id}.out.txt"
 
@@ -810,7 +810,7 @@ def main() -> int:
     # Guard to prevent opening multiple password dialogs at the same time.
     exit_prompt_in_progress = threading.Event()
 
-    def make_image(fill: tuple[int, int, int, int]) -> Image.Image:
+    def make_image(fill: Tuple[int, int, int, int]) -> Image.Image:
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         d.ellipse((4, 4, 60, 60), fill=fill)
@@ -851,7 +851,7 @@ def main() -> int:
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _get_cached_state() -> tuple[str, bool, str]:
+    def _get_cached_state() -> Tuple[str, bool, str]:
         with ui_lock:
             return (
                 str(ui_state.get("service_state") or "unknown"),
