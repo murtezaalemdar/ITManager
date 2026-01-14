@@ -38,7 +38,13 @@ foreach ($p in @('ITManagerAgentService', 'ITManagerAgentTray', 'ITManagerAgent'
 }
 Start-Sleep -Seconds 1
 
-$pd = Join-Path $env:ProgramData 'ITManagerAgent'
+# Windows 7 uyumu: ProgramData fallback
+$programData = $env:ProgramData
+if (-not $programData) { $programData = $env:ALLUSERSPROFILE }
+if (-not $programData) { $programData = 'C:\ProgramData' }
+
+$pd = Join-Path $programData 'ITManagerAgent'
+Write-Host "[INFO] Kurulum dizini: $pd" -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $pd | Out-Null
 
 # Remove legacy Quick Assist desktop shortcut if present
@@ -55,19 +61,30 @@ try {
 # Ensure config.json exists (first install UX)
 $cfgJson = Join-Path (Get-Location) 'config.json'
 $cfgExample = Join-Path (Get-Location) 'config.example.json'
-if (-not (Test-Path -LiteralPath $cfgJson)) {
-  if (Test-Path -LiteralPath $cfgExample) {
-    Copy-Item -Force -LiteralPath $cfgExample -Destination $cfgJson
-    Write-Host "[!] config.json bulunamadı; config.example.json -> config.json kopyalandı." -ForegroundColor Yellow
-    Write-Host "    Lütfen config.json içindeki server_url/api_key gibi alanları düzenleyin." -ForegroundColor Yellow
+$cfgDest = Join-Path $pd 'config.json'
+
+Write-Host "[INFO] Config kontrol: cfgJson=$cfgJson" -ForegroundColor DarkGray
+Write-Host "[INFO] Config kontrol: cfgExample=$cfgExample" -ForegroundColor DarkGray
+Write-Host "[INFO] Config kontrol: cfgDest=$cfgDest" -ForegroundColor DarkGray
+
+# Önce ProgramData'daki mevcut config'i kontrol et
+if (Test-Path -LiteralPath $cfgDest) {
+  Write-Host "[OK] ProgramData'da config.json zaten mevcut." -ForegroundColor Green
+} else {
+  # Kurulum dizininde config.json var mı?
+  if (Test-Path -LiteralPath $cfgJson) {
+    Write-Host "[INFO] Kurulum dizininden config.json kopyalanıyor..." -ForegroundColor Cyan
+    Copy-Item -Force -LiteralPath $cfgJson -Destination $cfgDest
+  } elseif (Test-Path -LiteralPath $cfgExample) {
+    Write-Host "[!] config.json yok; config.example.json kullanılıyor..." -ForegroundColor Yellow
+    Copy-Item -Force -LiteralPath $cfgExample -Destination $cfgDest
+    Write-Host "    Gerekirse $cfgDest dosyasını düzenleyin." -ForegroundColor Yellow
   } else {
-    throw "config.json bulunamadı ve config.example.json da yok. Kurulum yapılamadı."
+    throw "config.json ve config.example.json bulunamadı. Kurulum yapılamadı."
   }
 }
 
-# Copy config.json to stable location too (service/tray will read it there)
-Copy-Item -Force -LiteralPath $cfgJson -Destination (Join-Path $pd 'config.json')
-try { Unblock-File -Path (Join-Path $pd 'config.json') -ErrorAction SilentlyContinue } catch { }
+try { Unblock-File -Path $cfgDest -ErrorAction SilentlyContinue } catch { }
 
 $doService = -not $TrayOnly
 $doTray = -not $ServiceOnly
