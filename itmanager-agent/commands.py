@@ -403,6 +403,44 @@ def _parse_iso_or_date_time(payload: Dict[str, Any]) -> Tuple[int, str, str]:
         return 2, "", f"invalid datetime format: {iso}"
 
 
+def _get_windows_os_info() -> str:
+    """Get detailed Windows OS info like 'Windows 11 Pro 24H2'."""
+    if os.name != "nt":
+        import platform
+        return platform.platform()
+    
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        
+        product_name = ""
+        display_version = ""
+        
+        try:
+            product_name = winreg.QueryValueEx(key, "ProductName")[0]
+        except Exception:
+            pass
+        
+        try:
+            display_version = winreg.QueryValueEx(key, "DisplayVersion")[0]
+        except Exception:
+            pass
+        
+        winreg.CloseKey(key)
+        
+        if product_name:
+            # "Windows 11 Pro" -> "Windows 11 Pro 24H2"
+            if display_version:
+                return f"{product_name} {display_version}"
+            return product_name
+    except Exception:
+        pass
+    
+    # Fallback to platform.platform()
+    import platform
+    return platform.platform()
+
+
 def _get_installed_software() -> Dict[str, Any]:
     """Detect specific installed software from Windows registry."""
     software: Dict[str, Any] = {}
@@ -769,7 +807,7 @@ def _inventory() -> Dict[str, Any]:
     info: Dict[str, Any] = {
         "ts": datetime.now().strftime("%d %B %Y %A %H:%M:%S"),
         "hostname": platform.node(),
-        "platform": platform.platform(),
+        "platform": _get_windows_os_info(),
         "machine": platform.machine(),
         "processor": platform.processor(),
         "cpu_name": cpu_info.get("name", ""),
