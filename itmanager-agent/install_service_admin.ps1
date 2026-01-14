@@ -63,7 +63,12 @@ if (-not (Test-Path $srcExe)) {
 
 # Install from a stable location so the service keeps working after reboot
 # even if the extracted ZIP folder is moved or deleted.
-$pd = Join-Path $env:ProgramData 'ITManagerAgent'
+# Windows 7 uyumu: ProgramData fallback
+$programData = $env:ProgramData
+if (-not $programData) { $programData = $env:ALLUSERSPROFILE }
+if (-not $programData) { $programData = 'C:\ProgramData' }
+
+$pd = Join-Path $programData 'ITManagerAgent'
 New-Item -ItemType Directory -Force -Path $pd | Out-Null
 $exe = Join-Path $pd 'ITManagerAgentService.exe'
 Copy-Item -Force $srcExe $exe

@@ -24,7 +24,12 @@ if (-not (Test-IsAdmin)) {
 
 $srcTrayExe = (Resolve-Path $TrayExePath).Path
 
-$pdDir = Join-Path $env:ProgramData 'ITManagerAgent'
+# Windows 7 uyumu: ProgramData fallback
+$programData = $env:ProgramData
+if (-not $programData) { $programData = $env:ALLUSERSPROFILE }
+if (-not $programData) { $programData = 'C:\ProgramData' }
+
+$pdDir = Join-Path $programData 'ITManagerAgent'
 New-Item -ItemType Directory -Force -Path $pdDir | Out-Null
 $dstTrayExe = Join-Path $pdDir 'ITManagerAgentTray.exe'
 
@@ -43,12 +48,12 @@ try {
 } catch { }
 
 try {
-  $commonStartup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Startup'
+  $commonStartup = Join-Path $programData 'Microsoft\Windows\Start Menu\Programs\Startup'
   $commonLnk = Join-Path $commonStartup 'ITManagerAgentTray.lnk'
   if (Test-Path -LiteralPath $commonLnk) { Remove-Item -Force -LiteralPath $commonLnk -ErrorAction SilentlyContinue }
 } catch { }
 
-$startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Startup'
+$startup = Join-Path $programData 'Microsoft\Windows\Start Menu\Programs\Startup'
 New-Item -ItemType Directory -Force -Path $startup | Out-Null
 $lnkPath = Join-Path $startup "ITManagerAgentTray.lnk"
 
