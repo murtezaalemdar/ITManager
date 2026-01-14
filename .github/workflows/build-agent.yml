@@ -114,19 +114,13 @@ jobs:
           $platform = "${{ matrix.platform }}"
           $version = "${{ steps.version.outputs.VERSION }}"
 
-          # Common hidden imports for all builds
-          $hiddenImports = @(
-            "--hidden-import", "agent",
-            "--hidden-import", "commands", 
-            "--hidden-import", "version"
-          )
-
-          # Build Service - must include agent.py and commands.py as additional scripts
-          # so PyInstaller properly analyzes and bundles them
+          # Build Service - add all py files so PyInstaller analyzes them together
           python -m PyInstaller `
             --noconfirm `
             --onefile `
-            @hiddenImports `
+            --hidden-import "agent" `
+            --hidden-import "commands" `
+            --hidden-import "version" `
             --hidden-import "servicemanager" `
             --hidden-import "win32serviceutil" `
             --hidden-import "win32service" `
@@ -134,26 +128,28 @@ jobs:
             --hidden-import "win32api" `
             --hidden-import "win32timezone" `
             --name "ITManagerAgentService" `
-            --collect-all agent `
-            --collect-all commands `
-            --collect-all version `
-            service.py agent.py commands.py version.py
+            --add-data "agent.py;." `
+            --add-data "commands.py;." `
+            --add-data "version.py;." `
+            service.py
 
           # Build Tray
           python -m PyInstaller `
             --noconfirm `
             --onefile `
-            @hiddenImports `
+            --windowed `
+            --hidden-import "agent" `
+            --hidden-import "commands" `
+            --hidden-import "version" `
             --hidden-import "pystray" `
             --hidden-import "PIL" `
-            --windowed `
             --name "ITManagerAgentTray" `
-            --collect-all agent `
-            --collect-all commands `
-            --collect-all version `
-            tray.py agent.py commands.py version.py
+            --add-data "agent.py;." `
+            --add-data "commands.py;." `
+            --add-data "version.py;." `
+            tray.py
 
-          # Build Agent (standalone - includes its own dependencies naturally)
+          # Build Agent (standalone)
           python -m PyInstaller `
             --noconfirm `
             --onefile `
