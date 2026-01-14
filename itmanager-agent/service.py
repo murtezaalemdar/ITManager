@@ -101,16 +101,25 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
             # Defer importing agent modules until worker thread.
             # If a build accidentally misses bundled modules, the service will still
             # connect to SCM (avoids 1053) and we will log the real import error.
+            _boot_log("worker: importing agent module...")
             from agent import ITManagerAgent, load_config
+            _boot_log("worker: agent module imported OK")
 
             # Config path: prefer ProgramData (stable across upgrades), fallback to EXE dir.
             pd = _ensure_programdata_config_from_runtime()
             config_path = pd if pd.exists() else (_runtime_dir() / "config.json")
             _boot_log(f"worker start config={config_path}")
             servicemanager.LogInfoMsg(f"ITManagerAgent worker starting. config={config_path}")
+            
+            _boot_log("worker: loading config...")
             cfg = load_config(config_path)
+            _boot_log(f"worker: config loaded, server={cfg.server_base_url}")
+            
+            _boot_log("worker: creating ITManagerAgent instance...")
             agent = ITManagerAgent(cfg)
+            _boot_log("worker: ITManagerAgent created, calling run_forever...")
             agent.run_forever(stop_flag=self._stop_flag)
+            _boot_log("worker: run_forever returned normally")
         except Exception:
             self._worker_exc = traceback.format_exc()
             _boot_log("worker crashed\n" + self._worker_exc)
