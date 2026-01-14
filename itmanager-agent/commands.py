@@ -7,7 +7,7 @@ import base64
 import hashlib
 import hmac
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -415,6 +415,7 @@ def _get_windows_os_info() -> str:
         
         product_name = ""
         display_version = ""
+        current_build = ""
         
         try:
             product_name = winreg.QueryValueEx(key, "ProductName")[0]
@@ -425,14 +426,32 @@ def _get_windows_os_info() -> str:
             display_version = winreg.QueryValueEx(key, "DisplayVersion")[0]
         except Exception:
             pass
+
+        try:
+            current_build = winreg.QueryValueEx(key, "CurrentBuild")[0]
+        except Exception:
+            try:
+                current_build = winreg.QueryValueEx(key, "CurrentBuildNumber")[0]
+            except Exception:
+                pass
         
         winreg.CloseKey(key)
         
         if product_name:
+            # Normalize Windows 11 branding based on build number.
+            try:
+                build_num = int(str(current_build).strip() or "0")
+            except Exception:
+                build_num = 0
+
+            normalized = product_name
+            if build_num >= 22000 and "Windows 10" in product_name:
+                normalized = product_name.replace("Windows 10", "Windows 11")
+
             # "Windows 11 Pro" -> "Windows 11 Pro 24H2"
             if display_version:
-                return f"{product_name} {display_version}"
-            return product_name
+                return f"{normalized} {display_version}"
+            return normalized
     except Exception:
         pass
     
@@ -597,6 +616,23 @@ def _get_installed_software() -> Dict[str, Any]:
         pass
     
     return software
+
+
+def _format_tr_datetime(dt: datetime) -> str:
+    """Format datetime in Turkish like '14 Ocak 2026 Çarşamba 23:36:00'."""
+    months = [
+        "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+        "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+    ]
+    weekdays = [
+        "Pazartesi", "Salı", "Çarşamba", "Perşembe",
+        "Cuma", "Cumartesi", "Pazar",
+    ]
+
+    day = dt.day
+    month = months[dt.month - 1]
+    weekday = weekdays[dt.weekday()]
+    return f"{day} {month} {dt.year} {weekday} {dt:%H:%M:%S}"
 
 
 def _get_cpu_info() -> Dict[str, Any]:
@@ -804,8 +840,11 @@ def _inventory() -> Dict[str, Any]:
     system_info = _get_system_info()
     cpu_temp = _get_cpu_temperature()
     
+    # Türkiye saati (GMT+3) ve Türkçe tarih formatı
+    tr_now = datetime.utcnow() + timedelta(hours=3)
+
     info: Dict[str, Any] = {
-        "ts": datetime.now().strftime("%d %B %Y %A %H:%M:%S"),
+        "ts": _format_tr_datetime(tr_now),
         "hostname": platform.node(),
         "platform": _get_windows_os_info(),
         "machine": platform.machine(),
