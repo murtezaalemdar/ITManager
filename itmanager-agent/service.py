@@ -70,6 +70,18 @@ def _msgbox(title: str, text: str) -> None:
         pass
 
 
+class StopFlag:
+    """Thread-safe stop flag for graceful shutdown."""
+    def __init__(self) -> None:
+        self._evt = threading.Event()
+
+    def set(self) -> None:
+        self._evt.set()
+
+    def is_set(self) -> bool:
+        return self._evt.is_set()
+
+
 class ITManagerAgentService(win32serviceutil.ServiceFramework):
     _svc_name_ = "ITManagerAgent"
     _svc_display_name_ = "ITManager Agent"
@@ -117,65 +129,46 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
             except Exception:
                 pass
 
+    def SvcStop(self):
+        _boot_log("SvcStop")
+        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+        self._stop_flag.set()
+        win32event.SetEvent(self.hWaitStop)
 
-class StopFlag:
-    def __init__(self) -> None:
-        self._evt = threading.Event()
+    def SvcDoRun(self):
+        _boot_log("SvcDoRun entry")
+        # Avoid 1053: promptly report service running, do heavy work in a worker thread.
+        self.ReportServiceStatus(win32service.SERVICE_START_PENDING)
 
-    def set(self) -> None:
-        self._evt.set()
+        servicemanager.LogMsg(
+            servicemanager.EVENTLOG_INFORMATION_TYPE,
+            servicemanager.PYS_SERVICE_STARTED,
+            (self._svc_name_, ""),
+        )
 
-    def is_set(self) -> bool:
-        return self._evt.is_set()
+        try:
+            self._worker = threading.Thread(target=self._run_agent_worker, daemon=True)
+            self._worker.start()
+            self.ReportServiceStatus(win32service.SERVICE_RUNNING)
+            _boot_log("reported SERVICE_RUNNING")
 
+            # Wait until stop requested or worker exits.
+            while True:
+                rc = win32event.WaitForSingleObject(self.hWaitStop, 1000)
+                if rc == win32event.WAIT_OBJECT_0:
+                    break
+                if self._worker is not None and not self._worker.is_alive():
+                    break
+        except Exception as e:
+            _boot_log(f"SvcDoRun exception: {e!r}")
+            servicemanager.LogErrorMsg(f"ITManagerAgent crashed: {e!r}")
+            raise
 
-# SvcStop and SvcDoRun must be methods of ITManagerAgentService, not StopFlag!
-# We monkey-patch them here to keep the class definition clean above.
-def _SvcStop(self):
-    _boot_log("SvcStop")
-    self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-    self._stop_flag.set()
-    win32event.SetEvent(self.hWaitStop)
-
-
-def _SvcDoRun(self):
-    _boot_log("SvcDoRun entry")
-    # Avoid 1053: promptly report service running, do heavy work in a worker thread.
-    self.ReportServiceStatus(win32service.SERVICE_START_PENDING)
-
-    servicemanager.LogMsg(
-        servicemanager.EVENTLOG_INFORMATION_TYPE,
-        servicemanager.PYS_SERVICE_STARTED,
-        (self._svc_name_, ""),
-    )
-
-    try:
-        self._worker = threading.Thread(target=self._run_agent_worker, daemon=True)
-        self._worker.start()
-        self.ReportServiceStatus(win32service.SERVICE_RUNNING)
-        _boot_log("reported SERVICE_RUNNING")
-
-        # Wait until stop requested or worker exits.
-        while True:
-            rc = win32event.WaitForSingleObject(self.hWaitStop, 1000)
-            if rc == win32event.WAIT_OBJECT_0:
-                break
-            if self._worker is not None and not self._worker.is_alive():
-                break
-    except Exception as e:
-        _boot_log(f"SvcDoRun exception: {e!r}")
-        servicemanager.LogErrorMsg(f"ITManagerAgent crashed: {e!r}")
-        raise
-
-    servicemanager.LogMsg(
-        servicemanager.EVENTLOG_INFORMATION_TYPE,
-        servicemanager.PYS_SERVICE_STOPPED,
-        (self._svc_name_, ""),
-    )
-
-
-ITManagerAgentService.SvcStop = _SvcStop
-ITManagerAgentService.SvcDoRun = _SvcDoRun
+        servicemanager.LogMsg(
+            servicemanager.EVENTLOG_INFORMATION_TYPE,
+            servicemanager.PYS_SERVICE_STOPPED,
+            (self._svc_name_, ""),
+        )
 
 
 if __name__ == "__main__":
