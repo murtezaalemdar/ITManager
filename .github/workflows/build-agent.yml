@@ -114,36 +114,51 @@ jobs:
           $platform = "${{ matrix.platform }}"
           $version = "${{ steps.version.outputs.VERSION }}"
 
-          # Common args
-          $common = @(
-            "--noconfirm",
-            "--onefile",
+          # Common hidden imports for all builds
+          $hiddenImports = @(
             "--hidden-import", "agent",
-            "--hidden-import", "commands",
+            "--hidden-import", "commands", 
             "--hidden-import", "version"
           )
 
-          # Build Service
-          python -m PyInstaller @common `
-            --name "ITManagerAgentService" `
+          # Build Service - must include agent.py and commands.py as additional scripts
+          # so PyInstaller properly analyzes and bundles them
+          python -m PyInstaller `
+            --noconfirm `
+            --onefile `
+            @hiddenImports `
             --hidden-import "servicemanager" `
             --hidden-import "win32serviceutil" `
             --hidden-import "win32service" `
             --hidden-import "win32event" `
             --hidden-import "win32api" `
             --hidden-import "win32timezone" `
-            service.py
+            --name "ITManagerAgentService" `
+            --collect-all agent `
+            --collect-all commands `
+            --collect-all version `
+            service.py agent.py commands.py version.py
 
           # Build Tray
-          python -m PyInstaller @common `
-            --name "ITManagerAgentTray" `
-            --windowed `
+          python -m PyInstaller `
+            --noconfirm `
+            --onefile `
+            @hiddenImports `
             --hidden-import "pystray" `
             --hidden-import "PIL" `
-            tray.py
+            --windowed `
+            --name "ITManagerAgentTray" `
+            --collect-all agent `
+            --collect-all commands `
+            --collect-all version `
+            tray.py agent.py commands.py version.py
 
-          # Build Agent
-          python -m PyInstaller @common `
+          # Build Agent (standalone - includes its own dependencies naturally)
+          python -m PyInstaller `
+            --noconfirm `
+            --onefile `
+            --hidden-import "commands" `
+            --hidden-import "version" `
             --name "ITManagerAgent" `
             agent.py
 
