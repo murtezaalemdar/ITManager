@@ -15,7 +15,7 @@ import hmac
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List
 
 import requests
 
@@ -38,7 +38,7 @@ def _exit_password_path() -> Path:
     return Path(base) / "ITManagerAgent" / "exit_password.json"
 
 
-def _load_exit_password_record() -> dict | None:
+def _load_exit_password_record() -> Optional[Dict[str, Any]]:
     try:
         p = _exit_password_path()
         if not p.exists():
@@ -67,7 +67,7 @@ def _verify_exit_password(password: str, record: dict) -> bool:
         return False
 
 
-def _prompt_exit_password() -> str | None:
+def _prompt_exit_password() -> Optional[str]:
     try:
         import tkinter as tk
         from tkinter import simpledialog
