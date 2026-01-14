@@ -70,6 +70,18 @@ def _msgbox(title: str, text: str) -> None:
         pass
 
 
+class StopFlag:
+    """Thread-safe stop flag for graceful shutdown."""
+    def __init__(self):
+        self._evt = threading.Event()
+
+    def set(self):
+        self._evt.set()
+
+    def is_set(self):
+        return self._evt.is_set()
+
+
 class ITManagerAgentService(win32serviceutil.ServiceFramework):
     _svc_name_ = "ITManagerAgent"
     _svc_display_name_ = "ITManager Agent"
@@ -80,10 +92,10 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
         _boot_log("__init__")
         self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self._stop_flag = StopFlag()
-        self._worker: threading.Thread | None = None
-        self._worker_exc: str | None = None
+        self._worker = None
+        self._worker_exc = None
 
-    def _run_agent_worker(self) -> None:
+    def _run_agent_worker(self):
         try:
             # Defer importing agent modules until worker thread.
             # If a build accidentally misses bundled modules, the service will still
@@ -116,17 +128,6 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
                 win32event.SetEvent(self.hWaitStop)
             except Exception:
                 pass
-
-
-class StopFlag:
-    def __init__(self) -> None:
-        self._evt = threading.Event()
-
-    def set(self) -> None:
-        self._evt.set()
-
-    def is_set(self) -> bool:
-        return self._evt.is_set()
 
     def SvcStop(self):
         _boot_log("SvcStop")
