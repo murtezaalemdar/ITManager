@@ -767,7 +767,7 @@ def _inventory() -> Dict[str, Any]:
     cpu_temp = _get_cpu_temperature()
     
     info: Dict[str, Any] = {
-        "ts": datetime.utcnow().isoformat(),
+        "ts": datetime.now().strftime("%d %B %Y %A %H:%M:%S"),
         "hostname": platform.node(),
         "platform": platform.platform(),
         "machine": platform.machine(),
@@ -813,6 +813,14 @@ def _inventory() -> Dict[str, Any]:
                 "disks": disks,
             }
         )
+    except Exception:
+        pass
+
+    # Get installed software
+    try:
+        software = _get_installed_software()
+        if software:
+            info["software"] = software
     except Exception:
         pass
 
