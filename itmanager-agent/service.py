@@ -5,6 +5,7 @@ import threading
 import traceback
 import os
 from datetime import datetime
+from typing import Optional
 import servicemanager
 import win32event
 import win32service
@@ -92,8 +93,8 @@ class ITManagerAgentService(win32serviceutil.ServiceFramework):
         _boot_log("__init__")
         self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self._stop_flag = StopFlag()
-        self._worker: threading.Thread | None = None
-        self._worker_exc: str | None = None
+        self._worker: Optional[threading.Thread] = None
+        self._worker_exc: Optional[str] = None
 
     def _run_agent_worker(self) -> None:
         try:
