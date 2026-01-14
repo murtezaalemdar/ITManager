@@ -816,6 +816,14 @@ def _inventory() -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Get installed software
+    try:
+        software = _get_installed_software()
+        if software:
+            info["software"] = software
+    except Exception:
+        pass
+
     return info
 
 
