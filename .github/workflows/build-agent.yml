@@ -21,28 +21,28 @@ jobs:
         include:
           # Windows 10/11 64-bit
           - os: windows-latest
-            python-version: '3.13'
+            python-version: '3.11'
             architecture: x64
             platform: windows
             pip-packages: >-
-              pyinstaller==6.18.0
+              pyinstaller==6.11.1
               requests==2.32.3
               psutil==5.9.8
-              pywin32==307
+              pywin32==306
               pystray==0.19.5
               Pillow==10.4.0
               cryptography==42.0.8
 
           # Windows 10/11 32-bit
           - os: windows-latest
-            python-version: '3.13'
+            python-version: '3.11'
             architecture: x86
             platform: windows-32
             pip-packages: >-
-              pyinstaller==6.18.0
+              pyinstaller==6.11.1
               requests==2.32.3
               psutil==5.9.8
-              pywin32==307
+              pywin32==306
               pystray==0.19.5
               Pillow==10.4.0
               cryptography==42.0.8
