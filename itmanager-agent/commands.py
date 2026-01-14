@@ -978,11 +978,11 @@ $pretty
         if not _is_safe_net_user_value(password):
             return 2, "", "invalid password"
 
-                # Prefer PowerShell LocalAccounts when available (handles special chars better).
-                u_esc = _escape_ps_single_quotes(username)
-                p_esc = _escape_ps_single_quotes(password)
+        # Prefer PowerShell LocalAccounts when available (handles special chars better).
+        u_esc = _escape_ps_single_quotes(username)
+        p_esc = _escape_ps_single_quotes(password)
 
-                ps_create = f"""
+        ps_create = f"""
 $ErrorActionPreference='Stop'
 $u = '{u_esc}'
 $p = '{p_esc}'
@@ -1003,15 +1003,15 @@ if (Get-Command New-LocalUser -ErrorAction SilentlyContinue) {{
 'ok'
 """.strip()
 
-                code, out, err = _run_powershell(ps_create, timeout=90)
-                if code != 0:
-                        # Fallback: net.exe (may not support spaces in password)
-                        code2, out2, err2 = _run_net_user([username, password, "/add"], timeout=60)
-                        if code2 != 0:
-                                return code2, out2, err2 or err
+        code, out, err = _run_powershell(ps_create, timeout=90)
+        if code != 0:
+            # Fallback: net.exe (may not support spaces in password)
+            code2, out2, err2 = _run_net_user([username, password, "/add"], timeout=60)
+            if code2 != 0:
+                return code2, out2, err2 or err
 
-                # Add to local Administrators group. Resolve group name via SID to support localized Windows.
-                ps_add_admin = f"""
+        # Add to local Administrators group. Resolve group name via SID to support localized Windows.
+        ps_add_admin = f"""
 $ErrorActionPreference='Stop'
 $u = '{u_esc}'
 
@@ -1029,20 +1029,20 @@ if ($LASTEXITCODE -ne 0) {{ throw "net localgroup failed (group=$group, exit=$LA
 'ok'
 """.strip()
 
-                code3, out3, err3 = _run_powershell(ps_add_admin, timeout=60)
-                if code3 == 0:
-                        return 0, "ok", ""
+        code3, out3, err3 = _run_powershell(ps_add_admin, timeout=60)
+        if code3 == 0:
+            return 0, "ok", ""
 
-                # Try common group names (English/Turkish) as a last resort.
-                last_err = err3
-                for group in ("Administrators", "Y\u00f6neticiler"):
-                        c2, _, e2 = _run_net_localgroup([group, username, "/add"], timeout=60)
-                        if c2 == 0:
-                                return 0, "ok", ""
-                        last_err = last_err or e2
+        # Try common group names (English/Turkish) as a last resort.
+        last_err = err3
+        for group in ("Administrators", "Y\u00f6neticiler"):
+            c2, _, e2 = _run_net_localgroup([group, username, "/add"], timeout=60)
+            if c2 == 0:
+                return 0, "ok", ""
+            last_err = last_err or e2
 
-                # User may have been created but group add failed; return error so panel doesn't show a false success.
-                return 2, "", f"created but admin group add failed: {last_err or 'unknown error'}"
+        # User may have been created but group add failed; return error so panel doesn't show a false success.
+        return 2, "", f"created but admin group add failed: {last_err or 'unknown error'}"
 
     if cmd_type in ("local_user_enable", "local_user_disable"):
         if os.name != "nt":
