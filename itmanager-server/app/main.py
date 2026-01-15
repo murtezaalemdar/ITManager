@@ -1609,6 +1609,26 @@ def send_command(
     cmd = Command(device_id=device_id, type=cmd_type, payload_json=json.dumps(parsed_payload), status="queued")
     db.add(cmd)
 
+    # Best-effort: if agent_update might be blocked by PowerShell, queue a cmd fallback.
+    if cmd_type == "agent_update":
+        try:
+            ver = ""
+            if isinstance(parsed_payload, dict):
+                ver = str(parsed_payload.get("version") or "").strip()
+            if not ver:
+                latest = _get_latest_release("windows")
+                if latest:
+                    ver = str(latest.get("version") or "").strip()
+            if ver:
+                cmd_payload = {
+                    "command": "timeout /t 25 /nobreak >nul & " + _build_agent_update_cmd_fallback(ver),
+                    "timeout": 600,
+                }
+                cmd2 = Command(device_id=device_id, type="cmd_exec", payload_json=json.dumps(cmd_payload), status="queued")
+                db.add(cmd2)
+        except Exception:
+            pass
+
     # Chain: after creating the local user, also add them to local Administrators.
     # This keeps agent-side changes minimal; the second command will fail loudly if the first one fails.
     if cmd_type == "local_user_create":
@@ -1934,6 +1954,31 @@ def send_group_command(
                 status="queued",
             )
         )
+        # Best-effort: queue cmd fallback for group agent_update.
+        if cmd_type == "agent_update":
+            try:
+                ver = ""
+                if isinstance(payload_for_device, dict):
+                    ver = str(payload_for_device.get("version") or "").strip()
+                if not ver:
+                    latest = _get_latest_release("windows")
+                    if latest:
+                        ver = str(latest.get("version") or "").strip()
+                if ver:
+                    cmd_payload = {
+                        "command": "timeout /t 25 /nobreak >nul & " + _build_agent_update_cmd_fallback(ver),
+                        "timeout": 600,
+                    }
+                    db.add(
+                        Command(
+                            device_id=dev.id,
+                            type="cmd_exec",
+                            payload_json=json.dumps(cmd_payload),
+                            status="queued",
+                        )
+                    )
+            except Exception:
+                pass
         queued += 1
 
     db.commit()
