@@ -774,7 +774,12 @@ def _build_agent_update_fallback_ps(target_version: str = "") -> str:
             "set PD=C:\\ProgramData\\ITManagerAgent"
             f" & set VER={tv}"
             " & set STAGE="
-            " & for /d %D in (\"%PD%\\releases\\*%VER%*\") do set STAGE=%D"
+            " & if not \"%VER%\"==\"\" ("
+            " for /d %D in (\"%PD%\\releases\\*%VER%*\") do set STAGE=%D"
+            ") else ("
+            " for /f \"delims=\" %D in ('dir /b /ad /o-d \"%PD%\\releases\\*\" 2^>nul') do (set STAGE=%PD%\\releases\\%D & goto :found)"
+            ")"
+            " & :found"
             " & if \"%STAGE%\"==\"\" exit /b 2"
             " & sc stop ITManagerAgent >nul 2>&1"
             " & timeout /t 2 /nobreak >nul"
@@ -1615,17 +1620,12 @@ def send_command(
             ver = ""
             if isinstance(parsed_payload, dict):
                 ver = str(parsed_payload.get("version") or "").strip()
-            if not ver:
-                latest = _get_latest_release("windows")
-                if latest:
-                    ver = str(latest.get("version") or "").strip()
-            if ver:
-                cmd_payload = {
-                    "command": "timeout /t 25 /nobreak >nul & " + _build_agent_update_cmd_fallback(ver),
-                    "timeout": 600,
-                }
-                cmd2 = Command(device_id=device_id, type="cmd_exec", payload_json=json.dumps(cmd_payload), status="queued")
-                db.add(cmd2)
+            cmd_payload = {
+                "command": "timeout /t 25 /nobreak >nul & " + _build_agent_update_cmd_fallback(ver),
+                "timeout": 600,
+            }
+            cmd2 = Command(device_id=device_id, type="cmd_exec", payload_json=json.dumps(cmd_payload), status="queued")
+            db.add(cmd2)
         except Exception:
             pass
 
@@ -1960,23 +1960,18 @@ def send_group_command(
                 ver = ""
                 if isinstance(payload_for_device, dict):
                     ver = str(payload_for_device.get("version") or "").strip()
-                if not ver:
-                    latest = _get_latest_release("windows")
-                    if latest:
-                        ver = str(latest.get("version") or "").strip()
-                if ver:
-                    cmd_payload = {
-                        "command": "timeout /t 25 /nobreak >nul & " + _build_agent_update_cmd_fallback(ver),
-                        "timeout": 600,
-                    }
-                    db.add(
-                        Command(
-                            device_id=dev.id,
-                            type="cmd_exec",
-                            payload_json=json.dumps(cmd_payload),
-                            status="queued",
-                        )
+                cmd_payload = {
+                    "command": "timeout /t 25 /nobreak >nul & " + _build_agent_update_cmd_fallback(ver),
+                    "timeout": 600,
+                }
+                db.add(
+                    Command(
+                        device_id=dev.id,
+                        type="cmd_exec",
+                        payload_json=json.dumps(cmd_payload),
+                        status="queued",
                     )
+                )
             except Exception:
                 pass
         queued += 1
