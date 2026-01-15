@@ -764,6 +764,35 @@ def _build_agent_update_fallback_ps(target_version: str = "") -> str:
         "}"
     )
 
+    def _build_agent_update_cmd_fallback(target_version: str = "") -> str:
+        # Use cmd.exe only (no PowerShell) to finalize update from staged release.
+        tv = (target_version or "").strip()
+        tv = tv.replace('"', '').replace("'", "")
+        # NOTE: This assumes the agent already downloaded/extracted the release into
+        # C:\ProgramData\ITManagerAgent\releases\<platform>-<version>.
+        return (
+            "set PD=C:\\ProgramData\\ITManagerAgent"
+            f" & set VER={tv}"
+            " & set STAGE="
+            " & for /d %D in (\"%PD%\\releases\\*%VER%*\") do set STAGE=%D"
+            " & if \"%STAGE%\"==\"\" exit /b 2"
+            " & sc stop ITManagerAgent >nul 2>&1"
+            " & timeout /t 2 /nobreak >nul"
+            " & taskkill /F /T /IM ITManagerAgentService.exe >nul 2>&1"
+            " & taskkill /F /T /IM ITManagerAgentTray.exe >nul 2>&1"
+            " & taskkill /F /T /IM ITManagerAgent.exe >nul 2>&1"
+            " & timeout /t 1 /nobreak >nul"
+            " & copy /Y \"%STAGE%\\ITManagerAgentService.exe\" \"%PD%\\ITManagerAgentService.exe\" >nul"
+            " & copy /Y \"%STAGE%\\ITManagerAgentTray.exe\" \"%PD%\\ITManagerAgentTray.exe\" >nul"
+            " & copy /Y \"%STAGE%\\ITManagerAgent.exe\" \"%PD%\\ITManagerAgent.exe\" >nul"
+            " & sc query ITManagerAgent >nul 2>&1"
+            " & if errorlevel 1 (\"%PD%\\ITManagerAgentService.exe\" install >nul 2>&1)"
+            " & sc config ITManagerAgent binPath= \"\\\"%PD%\\ITManagerAgentService.exe\\\"\" start= auto >nul 2>&1"
+            " & sc failure ITManagerAgent reset= 0 actions= restart/5000/restart/5000/restart/5000 >nul 2>&1"
+            " & sc failureflag ITManagerAgent 1 >nul 2>&1"
+            " & sc start ITManagerAgent >nul 2>&1"
+        )
+
 
 def _agent_update_tool_ps1(target_version: str = "") -> str:
         tv = (target_version or "").strip()
@@ -2229,6 +2258,30 @@ async def agent_result(command_id: int, request: Request, db=Depends(db_session)
     cmd.status = "success" if cmd.exit_code == 0 else "failed"
     dev.last_seen_at = datetime.utcnow()
     db.commit()
+
+    # Auto-fallback for agents where PowerShell script didn't produce a log.
+    try:
+        if (cmd.type or "").strip().lower() == "agent_update":
+            out = (cmd.stdout or "").strip()
+            err = (cmd.stderr or "").strip()
+            if "no log yet" in err.lower() and "update-started:" in out:
+                ver = out.split("update-started:", 1)[1].strip().split()[0]
+                if ver:
+                    payload = {
+                        "command": _build_agent_update_cmd_fallback(ver),
+                        "timeout": 600,
+                    }
+                    cmd2 = Command(
+                        device_id=dev.id,
+                        type="cmd_exec",
+                        payload_json=json.dumps(payload),
+                        status="queued",
+                    )
+                    db.add(cmd2)
+                    db.commit()
+    except Exception:
+        # Best-effort only; do not break result handling.
+        pass
 
     return {"ok": True}
 
