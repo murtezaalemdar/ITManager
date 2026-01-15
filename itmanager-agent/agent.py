@@ -779,6 +779,104 @@ try {
         script_path.write_text(script, encoding="utf-8")
         return script_path
 
+        def _write_update_script_cmd(self, release_dir: Path, version: str) -> Path:
+                pd_dir = self.config.state_dir
+                log_path = pd_dir / "update_apply.log"
+                script_path = pd_dir / "apply_update.cmd"
+                install_dir = pd_dir
+                stage_svc_exe = (release_dir / "ITManagerAgentService.exe").resolve()
+                stage_tray_exe = (release_dir / "ITManagerAgentTray.exe").resolve()
+                stage_agent_exe = (release_dir / "ITManagerAgent.exe").resolve()
+
+                target_svc_exe = (install_dir / "ITManagerAgentService.exe").resolve()
+                target_tray_exe = (install_dir / "ITManagerAgentTray.exe").resolve()
+                target_agent_exe = (install_dir / "ITManagerAgent.exe").resolve()
+
+                def _cmd_quote(value: object) -> str:
+                        # Wrap in double quotes; cmd handles spaces in paths.
+                        return f"\"{value}\""
+
+                script = r"""@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+set "LOG=__LOG__"
+set "SVC=ITManagerAgent"
+set "STAGE_SVC=__STAGE_SVC__"
+set "STAGE_TRAY=__STAGE_TRAY__"
+set "STAGE_AGENT=__STAGE_AGENT__"
+set "TARGET_SVC=__TARGET_SVC__"
+set "TARGET_TRAY=__TARGET_TRAY__"
+set "TARGET_AGENT=__TARGET_AGENT__"
+set "INSTALL_DIR=__INSTALL_DIR__"
+
+call :Log update start target=__VERSION__ exe=%TARGET_SVC%
+call :Log stopping service
+sc stop "%SVC%" >nul 2>&1
+timeout /t 2 /nobreak >nul
+call :Log killing running processes (tray/agent)
+taskkill /F /T /IM ITManagerAgentService.exe >nul 2>&1
+taskkill /F /T /IM ITManagerAgentTray.exe >nul 2>&1
+taskkill /F /T /IM ITManagerAgent.exe >nul 2>&1
+timeout /t 1 /nobreak >nul
+
+call :Log copy binaries to ProgramData
+copy /Y "%STAGE_SVC%" "%TARGET_SVC%" >nul
+copy /Y "%STAGE_TRAY%" "%TARGET_TRAY%" >nul
+copy /Y "%STAGE_AGENT%" "%TARGET_AGENT%" >nul
+
+call :Log ensure service installed
+sc query "%SVC%" >nul 2>&1
+if errorlevel 1 (
+    "%TARGET_SVC%" install >nul 2>&1
+)
+
+call :Log config binPath + start=auto
+sc config "%SVC%" binPath= "\"%TARGET_SVC%\"" start= auto >nul 2>&1
+sc failure "%SVC%" reset= 0 actions= restart/5000/restart/5000/restart/5000 >nul 2>&1
+sc failureflag "%SVC%" 1 >nul 2>&1
+
+call :Log starting service
+sc start "%SVC%" >nul 2>&1
+
+rem Create tray startup shortcut via cscript (no PowerShell dependency)
+set "LNK=%ProgramData%\Microsoft\Windows\Start Menu\Programs\Startup\ITManagerAgentTray.lnk"
+set "VBS=%TEMP%\itmanager_tray_link.vbs"
+(
+    echo Set oWS = CreateObject("WScript.Shell")
+    echo sLinkFile = "%LNK%"
+    echo Set oLink = oWS.CreateShortcut(sLinkFile)
+    echo oLink.TargetPath = "%TARGET_TRAY%"
+    echo oLink.WorkingDirectory = "%INSTALL_DIR%"
+    echo oLink.WindowStyle = 7
+    echo oLink.Description = "ITManager Agent Tray"
+    echo oLink.Save
+) > "%VBS%"
+cscript //nologo "%VBS%" >nul 2>&1
+del "%VBS%" >nul 2>&1
+call :Log tray startup shortcut ok: %LNK%
+
+call :Log update done
+exit /b 0
+
+:Log
+>>"%LOG%" echo %date% %time% %*
+exit /b 0
+"""
+
+                script = (
+                        script.replace("__LOG__", str(log_path))
+                        .replace("__STAGE_SVC__", str(stage_svc_exe))
+                        .replace("__STAGE_TRAY__", str(stage_tray_exe))
+                        .replace("__STAGE_AGENT__", str(stage_agent_exe))
+                        .replace("__INSTALL_DIR__", str(install_dir))
+                        .replace("__TARGET_SVC__", str(target_svc_exe))
+                        .replace("__TARGET_TRAY__", str(target_tray_exe))
+                        .replace("__TARGET_AGENT__", str(target_agent_exe))
+                        .replace("__VERSION__", str(version))
+                )
+
+                script_path.write_text(script, encoding="utf-8")
+                return script_path
+
     def apply_update_if_needed(
         self,
         info: Dict[str, Any],
@@ -802,6 +900,7 @@ try {
             zip_path = self._download_release_zip(info)
             release_dir = self._extract_release(zip_path, info)
             script_path = self._write_update_script(release_dir, ver)
+            cmd_script_path = self._write_update_script_cmd(release_dir, ver)
 
             self.log.warning("applying_update version=%s script=%s", ver, str(script_path))
             self._maybe_notify_user_update(f"ITManager Agent güncelleniyor: {ver}.")
@@ -837,6 +936,31 @@ try {
                         started = True
                         break
                     time.sleep(0.25)
+                if not started:
+                    # PowerShell might be blocked by policy/AppLocker. Try cmd fallback.
+                    try:
+                        creationflags_cmd = 0
+                        if os.name == "nt":
+                            creationflags_cmd = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+                        subprocess.Popen(
+                            ["cmd.exe", "/c", str(cmd_script_path)],
+                            cwd=str(self.config.state_dir),
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=creationflags_cmd,
+                            close_fds=True,
+                        )
+                        # Wait again for log from cmd script
+                        deadline2 = time.time() + max(1, int(wait_for_log_seconds))
+                        while time.time() < deadline2:
+                            tail = _tail_text_file(log_path, max_chars=2000)
+                            if tail and "update start" in tail:
+                                started = True
+                                break
+                            time.sleep(0.25)
+                    except Exception:
+                        pass
+
                 if started:
                     return True, f"update-started:{ver}", ""
                 # If log didn't show up, still report started but include hint.
