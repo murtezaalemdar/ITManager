@@ -779,24 +779,21 @@ try {
         script_path.write_text(script, encoding="utf-8")
         return script_path
 
-        def _write_update_script_cmd(self, release_dir: Path, version: str) -> Path:
-                pd_dir = self.config.state_dir
-                log_path = pd_dir / "update_apply.log"
-                script_path = pd_dir / "apply_update.cmd"
-                install_dir = pd_dir
-                stage_svc_exe = (release_dir / "ITManagerAgentService.exe").resolve()
-                stage_tray_exe = (release_dir / "ITManagerAgentTray.exe").resolve()
-                stage_agent_exe = (release_dir / "ITManagerAgent.exe").resolve()
+    def _write_update_script_cmd(self, release_dir: Path, version: str) -> Path:
+        """Write CMD batch script for update (no PowerShell dependency)."""
+        pd_dir = self.config.state_dir
+        log_path = pd_dir / "update_apply.log"
+        script_path = pd_dir / "apply_update.cmd"
+        install_dir = pd_dir
+        stage_svc_exe = (release_dir / "ITManagerAgentService.exe").resolve()
+        stage_tray_exe = (release_dir / "ITManagerAgentTray.exe").resolve()
+        stage_agent_exe = (release_dir / "ITManagerAgent.exe").resolve()
 
-                target_svc_exe = (install_dir / "ITManagerAgentService.exe").resolve()
-                target_tray_exe = (install_dir / "ITManagerAgentTray.exe").resolve()
-                target_agent_exe = (install_dir / "ITManagerAgent.exe").resolve()
+        target_svc_exe = (install_dir / "ITManagerAgentService.exe").resolve()
+        target_tray_exe = (install_dir / "ITManagerAgentTray.exe").resolve()
+        target_agent_exe = (install_dir / "ITManagerAgent.exe").resolve()
 
-                def _cmd_quote(value: object) -> str:
-                        # Wrap in double quotes; cmd handles spaces in paths.
-                        return f"\"{value}\""
-
-                script = r"""@echo off
+        script = r"""@echo off
 setlocal EnableExtensions EnableDelayedExpansion
 set "LOG=__LOG__"
 set "SVC=ITManagerAgent"
@@ -862,20 +859,20 @@ exit /b 0
 exit /b 0
 """
 
-                script = (
-                        script.replace("__LOG__", str(log_path))
-                        .replace("__STAGE_SVC__", str(stage_svc_exe))
-                        .replace("__STAGE_TRAY__", str(stage_tray_exe))
-                        .replace("__STAGE_AGENT__", str(stage_agent_exe))
-                        .replace("__INSTALL_DIR__", str(install_dir))
-                        .replace("__TARGET_SVC__", str(target_svc_exe))
-                        .replace("__TARGET_TRAY__", str(target_tray_exe))
-                        .replace("__TARGET_AGENT__", str(target_agent_exe))
-                        .replace("__VERSION__", str(version))
-                )
+        script = (
+            script.replace("__LOG__", str(log_path))
+            .replace("__STAGE_SVC__", str(stage_svc_exe))
+            .replace("__STAGE_TRAY__", str(stage_tray_exe))
+            .replace("__STAGE_AGENT__", str(stage_agent_exe))
+            .replace("__INSTALL_DIR__", str(install_dir))
+            .replace("__TARGET_SVC__", str(target_svc_exe))
+            .replace("__TARGET_TRAY__", str(target_tray_exe))
+            .replace("__TARGET_AGENT__", str(target_agent_exe))
+            .replace("__VERSION__", str(version))
+        )
 
-                script_path.write_text(script, encoding="utf-8")
-                return script_path
+        script_path.write_text(script, encoding="utf-8")
+        return script_path
 
     def apply_update_if_needed(
         self,
@@ -902,22 +899,21 @@ exit /b 0
             script_path = self._write_update_script(release_dir, ver)
             cmd_script_path = self._write_update_script_cmd(release_dir, ver)
 
-            self.log.warning("applying_update version=%s script=%s", ver, str(script_path))
+            self.log.warning("applying_update version=%s cmd_script=%s ps_script=%s", ver, str(cmd_script_path), str(script_path))
             self._maybe_notify_user_update(f"ITManager Agent güncelleniyor: {ver}.")
 
-            # Run updater detached; it will stop this service process.
+            # Use CMD as primary updater (no PowerShell dependency - avoids ExecutionPolicy/GPO issues)
             creationflags = 0
             if os.name == "nt":
                 creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+            
+            log_path = self.config.state_dir / "update_apply.log"
+            started = False
+
+            # PRIMARY: Run CMD batch script first
+            self.log.info("running_cmd_updater %s", str(cmd_script_path))
             subprocess.Popen(
-                [
-                    "powershell.exe",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(script_path),
-                ],
+                ["cmd.exe", "/c", str(cmd_script_path)],
                 cwd=str(self.config.state_dir),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -925,10 +921,8 @@ exit /b 0
                 close_fds=True,
             )
 
-            # Best-effort: confirm the updater actually started by waiting for log output.
-            if wait_for_log_seconds > 0 and script_path is not None:
-                log_path = self.config.state_dir / "update_apply.log"
-                started = False
+            # Wait for log output to confirm CMD script started
+            if wait_for_log_seconds > 0:
                 deadline = time.time() + max(1, int(wait_for_log_seconds))
                 while time.time() < deadline:
                     tail = _tail_text_file(log_path, max_chars=2000)
@@ -936,41 +930,45 @@ exit /b 0
                         started = True
                         break
                     time.sleep(0.25)
-                if not started:
-                    # PowerShell might be blocked by policy/AppLocker. Try cmd fallback.
-                    try:
-                        creationflags_cmd = 0
-                        if os.name == "nt":
-                            creationflags_cmd = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-                        subprocess.Popen(
-                            ["cmd.exe", "/c", str(cmd_script_path)],
-                            cwd=str(self.config.state_dir),
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            creationflags=creationflags_cmd,
-                            close_fds=True,
-                        )
-                        # Wait again for log from cmd script
-                        deadline2 = time.time() + max(1, int(wait_for_log_seconds))
-                        while time.time() < deadline2:
-                            tail = _tail_text_file(log_path, max_chars=2000)
-                            if tail and "update start" in tail:
-                                started = True
-                                break
-                            time.sleep(0.25)
-                    except Exception:
-                        pass
 
-                if started:
-                    return True, f"update-started:{ver}", ""
-                # If log didn't show up, still report started but include hint.
-                tail2 = _tail_text_file(log_path, max_chars=2000)
-                hint = "updater launched but no log yet; check ProgramData/update_apply.log"
-                if tail2.strip():
-                    hint = hint + "\n\n" + tail2.strip()[-2000:]
-                return True, f"update-started:{ver}", hint
+            # FALLBACK: If CMD didn't work, try PowerShell as backup
+            if not started and wait_for_log_seconds > 0:
+                self.log.warning("cmd_updater_not_started trying_powershell_fallback")
+                try:
+                    subprocess.Popen(
+                        [
+                            "powershell.exe",
+                            "-NoProfile",
+                            "-ExecutionPolicy",
+                            "Bypass",
+                            "-File",
+                            str(script_path),
+                        ],
+                        cwd=str(self.config.state_dir),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=creationflags,
+                        close_fds=True,
+                    )
+                    # Wait again for log from PowerShell script
+                    deadline2 = time.time() + max(1, int(wait_for_log_seconds))
+                    while time.time() < deadline2:
+                        tail = _tail_text_file(log_path, max_chars=2000)
+                        if tail and "update start" in tail:
+                            started = True
+                            break
+                        time.sleep(0.25)
+                except Exception as ps_err:
+                    self.log.error("powershell_fallback_failed %r", ps_err)
 
-            return True, f"update-started:{ver}", ""
+            if started:
+                return True, f"update-started:{ver}", ""
+            # If log didn't show up, still report started but include hint.
+            tail2 = _tail_text_file(log_path, max_chars=2000)
+            hint = "updater launched but no log yet; check ProgramData/update_apply.log"
+            if tail2.strip():
+                hint = hint + "\n\n" + tail2.strip()[-2000:]
+            return True, f"update-started:{ver}", hint
         except Exception as e:
             self.log.error("apply_update_failed %r", e)
             self._write_health({"update_in_progress": False, "update_failed": True, "update_error": repr(e)[:500]})
